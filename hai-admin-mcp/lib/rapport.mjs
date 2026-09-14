@@ -1,0 +1,165 @@
+/**
+ * Livrables du run (CDC §8) : plan CSV (colonnes §5.7), rapport Markdown,
+ * messages CSV. Retourne des chaînes, l'appelant (CLI ou serveur) décide où écrire.
+ */
+import { toCsvBom } from "./csv.mjs";
+import { effectiveCaps } from "./policy.mjs";
+
+/** Colonnes §5.7 : colonnes v1 + `conformite` + ajouts v2. */
+export const PLAN_COLS = [
+  "pnr", "occupants", "cabine", "overlays", "categorie",
+  "hotel", "room_type", "chambres", "prix_total", "devise",
+  "conformite", "mode_reglement", "hotel_source", "provisoire",
+  "session_ref", "transfert", "escalade", "statut", "notes",
+];
+
+export function buildPlanCsv(plan) {
+  return toCsvBom(PLAN_COLS, plan);
+}
+
+export const MESSAGES_COLS = ["pnr", "lang", "subject", "body"];
+
+export function buildMessagesCsv(messages) {
+  return toCsvBom(MESSAGES_COLS, messages);
+}
+
+const fmtMoney = (v) => Number(v).toLocaleString("fr-FR");
+const fmtDateTime = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso || "?";
+  return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+};
+
+/**
+ * Rapport Markdown : scénario, escale, politique, relevés horodatés (EX-REL-2),
+ * plan par tier, escalades, extension et coût si fournis, avertissements.
+ * @param {{plan, summary, gaps}} alloc sortie d'allocate
+ * @param {Array} inventories relevés
+ * @param {object} ctx {station, scenario?, policy, checkin, checkout, nights?, runId?, cost?, extension?, warnings?}
+ */
+export function buildRapportMd(alloc, inventories, ctx) {
+  const { plan, summary, gaps } = alloc;
+  const { station, policy, checkin, checkout, runId, cost, extension, warnings } = ctx;
+  const nights = ctx.nights ?? Math.max(1, Math.round((new Date(checkout) - new Date(checkin)) / 86400000));
+  const caps = effectiveCaps(policy, station);
+  const lines = [];
+
+  lines.push(`# Plan d'hébergement — ${station?.name ?? "escale"} (démo v2)`);
+  lines.push("");
+  lines.push(`**Arrivée du vol : ${checkin}** · hébergement du **${checkin}** au **${checkout}** (${nights} nuit${nights > 1 ? "s" : ""})`);
+  if (runId) lines.push(`Run \`${runId}\``);
+  if (station) {
+    lines.push(
+      `Escale ${station.code} · transfert par défaut : ${station.transfer.default_mode}, max ${station.transfer.max_transfer_min} min` +
+        (station.pricing?.price_cap_factor && station.pricing.price_cap_factor !== 1
+          ? ` · facteur de plafond ${station.pricing.price_cap_factor}`
+          : ""),
+    );
+  }
+  lines.push("");
+  lines.push(`## Synthèse`);
+  lines.push("");
+  const chambresOk = plan.filter((p) => p.statut === "OK").reduce((s, p) => s + p.chambres, 0);
+  const couts = Object.entries(summary.coutParDevise).map(([d, v]) => `${fmtMoney(v)} ${d}`).join(" + ") || "0";
+  lines.push(`- Dossiers hébergés en ligne : **${summary.ok}** (${chambresOk} chambres)`);
+  lines.push(`- Dossiers à escalader au desk : **${summary.escalade}**`);
+  lines.push(`- Coût total relevé : **${couts}**`);
+  lines.push("");
+  lines.push(`| Cabine | OK | Escalade | Chambres | Plafond effectif |`);
+  lines.push(`|---|---|---|---|---|`);
+  for (const tier of ["J", "W", "Y"]) {
+    const s = summary.parTier[tier] ?? { ok: 0, escalade: 0, chambres: 0 };
+    lines.push(`| ${tier} | ${s.ok} | ${s.escalade} | ${s.chambres} | ${caps[tier]} EUR/nuit |`);
+  }
+  lines.push("");
+
+  lines.push(`## Relevés par hôtel`);
+  lines.push("");
+  for (const inv of inventories) {
+    const a = inv.answer;
+    lines.push(`### ${a?.hotel || inv.name || inv.hotelKey || inv.hotel}`);
+    lines.push("");
+    lines.push(`- session : \`${inv.sessionId ?? "-"}\` · statut ${inv.status ?? "-"} · outcome ${inv.outcome ?? "-"}`);
+    if (inv.error) lines.push(`- erreur : ${inv.error}`);
+    if (a?.found) {
+      if (a.observed_at) lines.push(`- **prix relevé le ${fmtDateTime(a.observed_at)}** — prix affiché, non garanti`);
+      const am = a.amenities ?? {};
+      const dist = a.distance_km ?? a.distance_to_airport_km;
+      lines.push(
+        `- ${a.stars || "?"}★ · note ${a.review_score ?? "?"}/10 (${a.review_count ?? "?"} avis) · ` +
+          `${dist >= 0 ? `${dist} km (réf. ${a.distance_ref ?? "airport"})` : "distance non affichée"} · devise ${a.currency}`,
+      );
+      lines.push(
+        `- équipements déclarés par la plateforme : wifi ${am.wifi_free ? "oui" : "non"} · room service ${am.room_service ?? "?"} · ` +
+          `espace travail ${am.workspace === true || am.workspace === "oui" ? "oui" : am.workspace === "non_precise" ? "non précisé" : "non"} · ` +
+          `navette ${am.airport_shuttle ?? "?"} · resto tardif ${am.restaurant_late ? "oui" : "non"} · PMR ${am.accessible ? "oui" : "non"}`,
+      );
+      if (a.payment) {
+        lines.push(`- paiement : prépaiement en ligne ${a.payment.prepayment_online ?? "non précisé"} · paiement sur place uniquement ${a.payment.pay_at_property_only === true ? "oui" : a.payment.pay_at_property_only === false ? "non" : "non précisé"}`);
+      }
+      if (a.notes) lines.push(`- notes agent : ${a.notes}`);
+      lines.push("");
+      lines.push(`| Type de chambre | Capacité | Famille | Dispo affichée | Plafond atteint | Prix/nuit | Annul. gratuite | Petit-déj |`);
+      lines.push(`|---|---|---|---|---|---|---|---|`);
+      for (const r of a.rooms ?? []) {
+        const displayed = r.quantity_available ?? r.quantity_displayed_max ?? "?";
+        lines.push(
+          `| ${r.room_type} | ${r.occupancy_adults}A+${r.occupancy_children ?? 0}C | ${r.family_capable ? "oui" : "-"} | ` +
+            `${displayed} | ${r.cap_reached ? "oui (borne basse)" : "-"} | ${fmtMoney(r.price_per_night)} | ` +
+            `${r.free_cancellation ? "oui" : "non"} | ${r.breakfast_included ? "oui" : "non"} |`,
+        );
+      }
+    } else if (a) {
+      lines.push(`- found=false : ${a.notes || "sans détail"}`);
+    }
+    lines.push("");
+  }
+
+  if (Object.keys(gaps.chambresManquantes).length) {
+    lines.push(`## Manques (escalade desk)`);
+    lines.push("");
+    for (const [tier, n] of Object.entries(gaps.chambresManquantes)) {
+      lines.push(`- cabine ${tier} : ${n} chambre(s) non couvertes par l'inventaire en ligne`);
+    }
+    lines.push("");
+  }
+
+  if (extension) {
+    lines.push(`## Extension`);
+    lines.push("");
+    lines.push(`- vagues exécutées : ${extension.waves ?? 0} · sondes : ${extension.probes ?? 0} · relevés supplémentaires : ${extension.surveys ?? 0}`);
+    if (extension.limits) {
+      lines.push(`- bornes : ${extension.limits.sessions_used ?? "?"}/${extension.limits.sessions_max ?? "?"} sessions · ${extension.limits.cost_usd ?? "?"}/${extension.limits.cost_max ?? "?"} USD`);
+    }
+    lines.push("");
+  }
+
+  if (cost) {
+    lines.push(`## Coût`);
+    lines.push("");
+    lines.push(`- par nuit : J ${fmtMoney(cost.per_night.J)} + W ${fmtMoney(cost.per_night.W)} + Y ${fmtMoney(cost.per_night.Y)} = **${fmtMoney(cost.per_night.total)} EUR**`);
+    lines.push(`- projection ${cost.nights} nuit${cost.nights > 1 ? "s" : ""} : **${fmtMoney(cost.projection_total)} EUR**`);
+    lines.push(`- borne haute aux plafonds (une chambre par passager) : ${fmtMoney(cost.upper_bound_at_caps)} EUR`);
+    lines.push(`- repas : ${cost.allowances.meal === null ? "non renseigné" : `${fmtMoney(cost.allowances.meal)} EUR`} · transport : ${cost.allowances.transport === null ? "non renseigné" : `${fmtMoney(cost.allowances.transport)} EUR`}`);
+    if (cost.not_determinable.length) lines.push(`- postes non déterminables : ${cost.not_determinable.join(", ")}`);
+    lines.push("");
+  }
+
+  if (warnings?.length) {
+    lines.push(`## Avertissements`);
+    lines.push("");
+    for (const w of warnings) lines.push(`- ${w}`);
+    lines.push("");
+  }
+
+  lines.push(`## Limites`);
+  lines.push("");
+  lines.push(
+    `Les quantités sont celles affichées en ligne (borne basse : le sélecteur plafonne à ~9 chambres par type). ` +
+      `Les prix sont ceux relevés à l'horodatage indiqué — un prix relevé n'est pas un prix garanti. ` +
+      `Les équipements sont **déclarés par la plateforme**, non audités ; les mentions « à confirmer » du plan pointent ` +
+      `les exigences que la fiche ne précise pas. Les dossiers en escalade relèvent du desk groupe des hôtels. ` +
+      `Aucune réservation n'a été effectuée ; prix publics uniquement, sans accord ni tarif négocié.`,
+  );
+  return lines.join("\n") + "\n";
+}
