@@ -1,0 +1,13 @@
+{
+  "name": "pax-hotel",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Démo v2 — outil d'hébergement d'urgence à agents Holo (IROPS)",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"hai-admin-mcp/test/**/*.test.mjs\"",
+    "demo": "node demo/server.mjs",
+    "dry-run": "node hai-admin-mcp/tools/rebooking-v2.mjs --dry-run"
+  },
+  "engines": { "node": ">=22" }
+}

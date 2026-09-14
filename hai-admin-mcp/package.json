@@ -1,0 +1,22 @@
+{
+  "name": "hai-admin-mcp",
+  "version": "1.0.0",
+  "description": "Serveur MCP local d administration des Computer-Use Agents H Company",
+  "main": "src/server.mjs",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "check": "node --check src/server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/server-filesystem": "^2026.7.10",
+    "hai-agents": "^1.0.7",
+    "mcp-remote": "^0.8.2",
+    "zod": "^4.5.4"
+  },
+  "type": "module",
+  "private": true,
+  "bin": {
+    "hai-admin-mcp": "src/server.mjs"
+  }
+}

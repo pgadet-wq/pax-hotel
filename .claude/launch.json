@@ -1,0 +1,6 @@
+{
+  "name": "demo-bkk",
+  "runtimeExecutable": "node",
+  "runtimeArgs": ["demo/server.mjs"],
+  "port": 4310
+}
