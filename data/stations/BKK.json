@@ -1,0 +1,27 @@
+{
+  "code": "BKK",
+  "name": "Bangkok Suvarnabhumi",
+  "country": "TH",
+  "timezone": "Asia/Bangkok",
+  "search": {
+    "zone_query": "Suvarnabhumi Airport Bangkok",
+    "radius_km": 5,
+    "distance_ref": "airport",
+    "use_distance_filter": true,
+    "extra_nflt": []
+  },
+  "transfer": { "default_mode": "taxi", "max_transfer_min": 45, "note": "" },
+  "constraints": {
+    "entry_visa_check": true,
+    "transit_hotel_airside": true,
+    "notes": "Passagers sans droit d'entrée : traitement nominatif GHA."
+  },
+  "pricing": { "price_cap_factor": 1.0 },
+  "fallback_hotels": [
+    { "name": "Novotel Bangkok Suvarnabhumi Airport", "url": "https://www.booking.com/hotel/th/novotel-bangkok-suvarnabhumi-airport.html" },
+    { "name": "Le Méridien Suvarnabhumi Golf Resort & Spa", "url": "https://www.booking.com/hotel/th/le-meridien-suvarnabhumi.html" },
+    { "name": "Amaranth Suvarnabhumi Hotel", "url": "https://www.booking.com/hotel/th/amaranth-suvarnabhumi.html" },
+    { "name": "Divalux Resort & Spa Bangkok", "url": "https://www.booking.com/hotel/th/divalux-resort-spa.html" }
+  ],
+  "demo_priority": 1
+}

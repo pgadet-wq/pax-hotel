@@ -1,0 +1,26 @@
+{
+  "code": "NOU",
+  "name": "Nouméa La Tontouta",
+  "country": "NC",
+  "timezone": "Pacific/Noumea",
+  "search": {
+    "zone_query": "Nouméa",
+    "radius_km": 10,
+    "distance_ref": "zone_center",
+    "use_distance_filter": false,
+    "extra_nflt": []
+  },
+  "transfer": {
+    "default_mode": "navette",
+    "max_transfer_min": 75,
+    "note": "Valeur de départ éditable (H-5) : l'aéroport de La Tontouta est à ~45 km du centre de Nouméa."
+  },
+  "constraints": {
+    "entry_visa_check": false,
+    "transit_hotel_airside": false,
+    "notes": "Hôtels concentrés en centre-ville et baies : recherche par centre de zone, pas de filtre distance (EX-STA-2)."
+  },
+  "pricing": { "price_cap_factor": 1.0 },
+  "fallback_hotels": [],
+  "demo_priority": 3
+}

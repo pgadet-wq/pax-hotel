@@ -1,0 +1,87 @@
+{
+  "station": "BKK",
+  "updated_at": "2026-09-14T09:30:00Z",
+  "reference": { "checkin": "2026-09-28", "nights": 1 },
+  "hotels": [
+    {
+      "id": "hyatt-regency-bkk-airport",
+      "name": "Hyatt Regency Bangkok Suvarnabhumi Airport",
+      "url": "https://www.booking.com/hotel/th/hyatt-regency-bangkok-suvarnabhumi-airport.html",
+      "source": "agent",
+      "contracted": false, "preferred": false, "excluded": false,
+      "stars": 5, "review_score": 8.9, "review_count": 2233,
+      "distance_km": 1.5, "distance_ref": "airport",
+      "amenities": {
+        "wifi_free": true, "room_service": "24h", "workspace": "oui",
+        "airport_shuttle": "gratuite", "restaurant_late": true, "accessible": true,
+        "breakfast_available": true, "family_capable": false
+      },
+      "payment": { "prepayment_online": "oui", "pay_at_property_only": false },
+      "indicative_price_from_eur": 134,
+      "capacity_hint": { "rooms_displayed_max": 9, "cap_reached": true, "observed_at": "2026-09-14T09:12:00Z" },
+      "contact": { "phone": null, "email": null },
+      "notes": "Rafraîchissement simulé du 14/09 (fixtures Étage 0).",
+      "last_survey_at": "2026-09-14T09:12:00Z"
+    },
+    {
+      "id": "canalis-suvarnabhumi-airport",
+      "name": "Canalis Suvarnabhumi Airport Hotel",
+      "url": "https://www.booking.com/hotel/th/canalis-suvarnabhumi-airport.html",
+      "source": "agent",
+      "contracted": false, "preferred": false, "excluded": false,
+      "stars": 4, "review_score": 8.5, "review_count": 4402,
+      "distance_km": 4.8, "distance_ref": "airport",
+      "amenities": {
+        "wifi_free": true, "room_service": "non_precise", "workspace": "non_precise",
+        "airport_shuttle": "gratuite", "restaurant_late": false, "accessible": false,
+        "breakfast_available": true, "family_capable": true
+      },
+      "payment": { "prepayment_online": "non_precise", "pay_at_property_only": null },
+      "indicative_price_from_eur": 138,
+      "capacity_hint": { "rooms_displayed_max": 4, "cap_reached": false, "observed_at": "2026-09-14T09:15:00Z" },
+      "contact": { "phone": null, "email": null },
+      "notes": "Rafraîchissement simulé du 14/09 (fixtures Étage 0).",
+      "last_survey_at": "2026-09-14T09:15:00Z"
+    },
+    {
+      "id": "divalux-resort-spa-bkk",
+      "name": "Divalux Resort & Spa Bangkok, Suvarnabhumi Airport-Free Shuttle",
+      "url": "https://www.booking.com/hotel/th/divalux-resort-spa.html",
+      "source": "agent",
+      "contracted": false, "preferred": false, "excluded": false,
+      "stars": 4, "review_score": 8.4, "review_count": 1911,
+      "distance_km": 4.2, "distance_ref": "airport",
+      "amenities": {
+        "wifi_free": true, "room_service": "oui", "workspace": "non_precise",
+        "airport_shuttle": "gratuite", "restaurant_late": true, "accessible": true,
+        "breakfast_available": true, "family_capable": false
+      },
+      "payment": { "prepayment_online": "non", "pay_at_property_only": true },
+      "indicative_price_from_eur": 29,
+      "capacity_hint": { "rooms_displayed_max": 8, "cap_reached": false, "observed_at": "2026-09-14T09:18:00Z" },
+      "contact": { "phone": null, "email": null },
+      "notes": "Rafraîchissement simulé du 14/09 (fixtures Étage 0).",
+      "last_survey_at": "2026-09-14T09:18:00Z"
+    },
+    {
+      "id": "novotel-bkk-airport",
+      "name": "Novotel Bangkok Suvarnabhumi Airport",
+      "url": "https://www.booking.com/hotel/th/novotel-bangkok-suvarnabhumi-airport.html",
+      "source": "agent",
+      "contracted": false, "preferred": false, "excluded": false,
+      "stars": 4, "review_score": 8.1, "review_count": 3120,
+      "distance_km": 1.2, "distance_ref": "airport",
+      "amenities": {
+        "wifi_free": true, "room_service": "24h", "workspace": "oui",
+        "airport_shuttle": "gratuite", "restaurant_late": true, "accessible": true,
+        "breakfast_available": true, "family_capable": true
+      },
+      "payment": { "prepayment_online": "oui", "pay_at_property_only": false },
+      "indicative_price_from_eur": 92,
+      "capacity_hint": { "rooms_displayed_max": 9, "cap_reached": true, "observed_at": "2026-09-14T09:21:00Z" },
+      "contact": { "phone": null, "email": null },
+      "notes": "Hôtel connecté au terminal, relisté sur la plateforme (fixtures Étage 0 du 14/09).",
+      "last_survey_at": "2026-09-14T09:21:00Z"
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "station": "BKK",
+  "updated_at": "2026-08-31T04:00:00Z",
+  "reference": { "checkin": "2026-09-01", "nights": 1 },
+  "hotels": [
+    {
+      "id": "hyatt-regency-bkk-airport",
+      "name": "Hyatt Regency Bangkok Suvarnabhumi Airport",
+      "url": "https://www.booking.com/hotel/th/hyatt-regency-bangkok-suvarnabhumi-airport.html",
+      "source": "agent",
+      "contracted": false, "preferred": false, "excluded": false,
+      "stars": 5, "review_score": 8.9, "review_count": 2148,
+      "distance_km": 1.5, "distance_ref": "airport",
+      "amenities": {
+        "wifi_free": true, "room_service": "24h", "workspace": "oui",
+        "airport_shuttle": "gratuite", "restaurant_late": true, "accessible": true,
+        "breakfast_available": true, "family_capable": false
+      },
+      "payment": { "prepayment_online": "oui", "pay_at_property_only": false },
+      "indicative_price_from_eur": 129,
+      "capacity_hint": { "rooms_displayed_max": 9, "cap_reached": true, "observed_at": "2026-08-31T03:41:00Z" },
+      "contact": { "phone": null, "email": null },
+      "notes": "Relevé POC du 31/08 (substitution du Novotel, délisté à ces dates).",
+      "last_survey_at": "2026-08-31T03:41:00Z"
+    },
+    {
+      "id": "canalis-suvarnabhumi-airport",
+      "name": "Canalis Suvarnabhumi Airport Hotel",
+      "url": "https://www.booking.com/hotel/th/canalis-suvarnabhumi-airport.html",
+      "source": "agent",
+      "contracted": false, "preferred": false, "excluded": false,
+      "stars": 4, "review_score": 8.5, "review_count": 4321,
+      "distance_km": 4.8, "distance_ref": "airport",
+      "amenities": {
+        "wifi_free": true, "room_service": "non_precise", "workspace": "non_precise",
+        "airport_shuttle": "gratuite", "restaurant_late": false, "accessible": false,
+        "breakfast_available": true, "family_capable": true
+      },
+      "payment": { "prepayment_online": "non_precise", "pay_at_property_only": null },
+      "indicative_price_from_eur": 142,
+      "capacity_hint": { "rooms_displayed_max": 2, "cap_reached": false, "observed_at": "2026-08-31T03:45:00Z" },
+      "contact": { "phone": null, "email": null },
+      "notes": "Relevé POC du 31/08 (substitution de l'Amaranth, absent des résultats).",
+      "last_survey_at": "2026-08-31T03:45:00Z"
+    },
+    {
+      "id": "divalux-resort-spa-bkk",
+      "name": "Divalux Resort & Spa Bangkok, Suvarnabhumi Airport-Free Shuttle",
+      "url": "https://www.booking.com/hotel/th/divalux-resort-spa.html",
+      "source": "agent",
+      "contracted": false, "preferred": false, "excluded": false,
+      "stars": 4, "review_score": 8.4, "review_count": 1876,
+      "distance_km": 4.2, "distance_ref": "airport",
+      "amenities": {
+        "wifi_free": true, "room_service": "oui", "workspace": "non_precise",
+        "airport_shuttle": "gratuite", "restaurant_late": true, "accessible": true,
+        "breakfast_available": true, "family_capable": false
+      },
+      "payment": { "prepayment_online": "non", "pay_at_property_only": true },
+      "indicative_price_from_eur": 26,
+      "capacity_hint": { "rooms_displayed_max": 8, "cap_reached": false, "observed_at": "2026-08-31T03:47:00Z" },
+      "contact": { "phone": null, "email": null },
+      "notes": "Relevé POC du 31/08.",
+      "last_survey_at": "2026-08-31T03:47:00Z"
+    }
+  ]
+}
