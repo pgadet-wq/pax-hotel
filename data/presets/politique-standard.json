@@ -1,0 +1,127 @@
+{
+  "name": "politique-standard",
+  "saved_at": "2026-09-15T00:00:00Z",
+  "policy": {
+    "version": 2,
+    "cabins": {
+      "J": {
+        "min_stars": 4,
+        "max_stars": 5,
+        "required_amenities": [
+          "wifi_free",
+          "room_service_24h",
+          "workspace"
+        ],
+        "nice_to_have": [
+          "airport_shuttle",
+          "restaurant_late"
+        ],
+        "price_cap_eur": 250,
+        "allow_above_cap_if_no_alternative": true
+      },
+      "W": {
+        "min_stars": 3,
+        "max_stars": 4,
+        "required_amenities": [
+          "wifi_free",
+          "breakfast_available"
+        ],
+        "nice_to_have": [
+          "airport_shuttle"
+        ],
+        "price_cap_eur": 130,
+        "allow_above_cap_if_no_alternative": true
+      },
+      "Y": {
+        "min_stars": 3,
+        "max_stars": null,
+        "required_amenities": [
+          "wifi_free"
+        ],
+        "nice_to_have": [
+          "airport_shuttle",
+          "breakfast_available"
+        ],
+        "price_cap_eur": 80,
+        "allow_above_cap_if_no_alternative": true
+      }
+    },
+    "global": {
+      "priorities": [
+        "pmr",
+        "famille",
+        "J",
+        "W",
+        "Y"
+      ],
+      "rooming": {
+        "family_unit_max": {
+          "adults": 2,
+          "children": 2
+        },
+        "beyond": "two_rooms_same_hotel",
+        "infants_no_capacity": true
+      },
+      "overlays": {
+        "pmr": {
+          "require_accessible": true,
+          "distance_weight_boost": 2,
+          "allow_tier_upgrade": true
+        },
+        "famille": {
+          "require_family_room_or_two_rooms_same_hotel": true
+        }
+      },
+      "scoring": {
+        "w_review": 0.35,
+        "w_stars_fit": 0.15,
+        "w_distance": 0.25,
+        "w_price_headroom": 0.25
+      },
+      "discovery": {
+        "min_review_score": 7,
+        "n_socle": 8,
+        "max_candidates": 10,
+        "max_hotels_stage_b": 5,
+        "max_hotels_total": 10
+      },
+      "negotiated_rates": false,
+      "currency": "EUR",
+      "free_cancellation_preferred": true
+    },
+    "allowances": {
+      "meal_eur_per_pax_per_day": null,
+      "transport_eur_per_pax": null
+    },
+    "payment": {
+      "default_mode": "compagnie",
+      "prepaid_card": {
+        "enabled": true,
+        "load_includes": [
+          "nuit",
+          "repas",
+          "transport"
+        ]
+      }
+    },
+    "extension": {
+      "enabled": true,
+      "probe_same_hotel_first": true,
+      "batch_size": "auto",
+      "max_waves": 4,
+      "max_sessions_per_run": 18,
+      "max_cost_usd_per_run": 10,
+      "probe_no_rooms_max": 30
+    },
+    "agents": {
+      "concurrency": "auto",
+      "stagger_ms": 10000,
+      "model_stage_ab": "auto",
+      "model_probe": "auto"
+    },
+    "inventory": {
+      "max_age_days": 30,
+      "min_candidates_per_tier": 2
+    }
+  }
+}

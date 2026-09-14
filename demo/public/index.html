@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hébergement d'urgence — démo v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Hébergement d'urgence <span class="muted">· démo v2 · agents Holo</span></h1>
+  <nav class="tabs">
+    <button id="tab-operation" class="tab active" type="button">Opération</button>
+    <button id="tab-inventaire" class="tab" type="button">Inventaire</button>
+  </nav>
+  <div class="top-status">
+    <span id="status-chip" class="chip idle">prêt</span>
+    <span id="run-id" class="muted"></span>
+  </div>
+</header>
+
+<!-- ============================== OPÉRATION ============================== -->
+<div id="view-operation" class="view">
+  <aside id="form-col" class="form-col">
+    <button id="form-toggle" class="form-toggle" type="button" title="Replier / déplier le formulaire">◀</button>
+    <div id="form-body">
+
+      <fieldset>
+        <legend>Escale</legend>
+        <label>Escale
+          <select id="f-station"></select>
+        </label>
+        <p id="station-info" class="hint"></p>
+        <p class="hint"><button id="link-inventaire" class="linklike" type="button">Voir l'inventaire de l'escale →</button></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Politique</legend>
+        <div id="policy-cabins"></div>
+        <details>
+          <summary>Chambrage et priorités</summary>
+          <label>Unité familiale — adultes max
+            <input id="f-fam-adults" type="number" min="1" max="4" step="1">
+          </label>
+          <label>Unité familiale — enfants max
+            <input id="f-fam-children" type="number" min="0" max="4" step="1">
+          </label>
+          <label>Priorités (ordre)
+            <input id="f-priorities" type="text" spellcheck="false">
+          </label>
+        </details>
+        <details>
+          <summary>Règlement</summary>
+          <label>Mode par défaut
+            <select id="f-pay-mode">
+              <option value="compagnie">compagnie</option>
+              <option value="carte_prepayee">carte prépayée</option>
+            </select>
+          </label>
+          <label class="checkline"><input id="f-pay-card" type="checkbox"> Carte prépayée activée</label>
+        </details>
+        <details>
+          <summary>Extension (bornes)</summary>
+          <label class="checkline"><input id="f-ext-enabled" type="checkbox"> Extension activée</label>
+          <label class="checkline"><input id="f-ext-probe" type="checkbox"> Sonder d'abord le même hôtel (H-3)</label>
+          <label>Vagues max <input id="f-ext-waves" type="number" min="0" max="8" step="1"></label>
+          <label>Sessions max / run <input id="f-ext-sessions" type="number" min="0" max="50" step="1"></label>
+          <label>Coût max / run ($) <input id="f-ext-cost" type="number" min="0" step="0.5"></label>
+        </details>
+        <div class="preset-row">
+          <label>Presets
+            <select id="f-preset"></select>
+          </label>
+          <button id="btn-preset-load" type="button">Charger</button>
+        </div>
+        <div class="preset-row">
+          <label>Nom
+            <input id="f-preset-name" type="text" placeholder="ex. politique-hiver" spellcheck="false">
+          </label>
+          <button id="btn-preset-save" type="button">Sauvegarder</button>
+        </div>
+        <p id="preset-msg" class="hint"></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Avion</legend>
+        <label>Type
+          <input id="f-avion-nom" type="text" spellcheck="false">
+        </label>
+        <div class="seats-row">
+          <label>J <input id="f-seats-J" type="number" min="0" max="600" step="1"></label>
+          <label>W <input id="f-seats-W" type="number" min="0" max="600" step="1"></label>
+          <label>Y <input id="f-seats-Y" type="number" min="0" max="600" step="1"></label>
+        </div>
+        <div class="preset-row">
+          <button id="btn-generate" type="button">Générer la liste</button>
+          <label class="upload-label">Téléverser CSV
+            <input id="f-upload" type="file" accept=".csv,text/csv">
+          </label>
+        </div>
+        <p id="pax-stats" class="hint"></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Scénario</legend>
+        <label>Arrivée (check-in)
+          <input id="f-checkin" type="date">
+        </label>
+        <label>Nuits
+          <input id="f-nights" type="number" min="1" max="7" step="1">
+        </label>
+        <label>Seed
+          <input id="f-seed" type="number" min="0" step="1">
+        </label>
+        <label class="checkline"><input id="f-force-discovery" type="checkbox"> Forcer la découverte</label>
+        <label class="checkline"><input id="f-simulate" type="checkbox" checked> Mode démonstration (sans agents)</label>
+        <label>Vitesse de simulation
+          <select id="f-sim-speed">
+            <option value="1">réelle (~90 s)</option>
+            <option value="5">accélérée ×5</option>
+            <option value="20">accélérée ×20</option>
+          </select>
+        </label>
+      </fieldset>
+
+      <div class="run-row">
+        <button id="btn-run" class="primary" type="button">Lancer la prise en charge</button>
+        <button id="btn-dry-run" type="button">Dry-run (URL, aucun agent)</button>
+        <button id="btn-cancel" class="danger hidden" type="button">Annuler le run</button>
+        <button id="btn-cancel-ext" class="warn hidden" type="button">Arrêter l'extension</button>
+      </div>
+      <p id="run-error" class="error" role="alert"></p>
+    </div>
+  </aside>
+
+  <main class="dashboard">
+    <section id="phases-frise" class="frise" aria-label="Phases du run"></section>
+
+    <section id="banner" class="banner">
+      <div class="banner-item"><span class="b-label">coût agents</span><span id="b-cost" class="b-value">0,00 $</span></div>
+      <div class="banner-item"><span class="b-label">tokens</span><span id="b-tokens" class="b-value">0</span></div>
+      <div class="banner-item"><span class="b-label">pas</span><span id="b-steps" class="b-value">0</span></div>
+      <div class="banner-item"><span class="b-label">extension — sessions</span><span id="b-ext-sessions" class="b-value">—</span></div>
+      <div class="banner-item"><span class="b-label">extension — coût</span><span id="b-ext-cost" class="b-value">—</span></div>
+      <div class="banner-item"><span class="b-label">vague</span><span id="b-ext-wave" class="b-value">—</span></div>
+      <div class="banner-item"><span class="b-label">durée</span><span id="b-elapsed" class="b-value">—</span></div>
+    </section>
+
+    <section id="dry-run-panel" class="panel hidden">
+      <h2>Dry-run — aucun agent</h2>
+      <div id="dry-run-body"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Agents <span id="agents-count" class="muted"></span></h2>
+      <div id="agents" class="agents-grid"></div>
+    </section>
+
+    <section id="extension-panel" class="panel hidden">
+      <h2>Extension</h2>
+      <p id="extension-info"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Plan d'hébergement <span id="plan-summary" class="muted"></span></h2>
+      <div class="table-wrap">
+        <table id="plan-table">
+          <thead>
+            <tr><th>PNR</th><th>Cab.</th><th>Surcouches</th><th>File</th><th>Hôtel</th><th>Type de chambre</th><th>Ch.</th><th>Prix</th><th>Conformité</th><th>Règlement</th><th>Statut</th><th>Notes</th></tr>
+          </thead>
+          <tbody id="plan-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="cost-panel" class="panel hidden">
+      <h2>Coût</h2>
+      <div id="cost-body"></div>
+    </section>
+
+    <section id="messages-panel" class="panel hidden">
+      <h2>Messages passagers</h2>
+      <div class="msg-controls">
+        <div class="seg" role="group" aria-label="Langue">
+          <button id="msg-fr" class="seg-btn active" type="button">FR</button>
+          <button id="msg-en" class="seg-btn" type="button">EN</button>
+        </div>
+        <label>Tier
+          <select id="msg-tier">
+            <option value="">tous</option>
+            <option value="J">J</option>
+            <option value="W">W</option>
+            <option value="Y">Y</option>
+          </select>
+        </label>
+        <span id="msg-count" class="muted"></span>
+      </div>
+      <div id="messages-list"></div>
+    </section>
+
+    <section id="final-panel" class="panel hidden">
+      <h2>Run terminé</h2>
+      <p id="final-summary"></p>
+      <div id="downloads" class="downloads"></div>
+    </section>
+
+    <section id="warnings-panel" class="panel hidden">
+      <h2>Avertissements</h2>
+      <ul id="warnings"></ul>
+    </section>
+  </main>
+</div>
+
+<!-- ============================== INVENTAIRE ============================= -->
+<div id="view-inventaire" class="view hidden">
+  <main class="inventaire">
+    <section class="panel">
+      <div class="inv-head">
+        <label>Escale
+          <select id="inv-station"></select>
+        </label>
+        <span id="inv-updated" class="muted"></span>
+        <span id="inv-stale" class="chip warn hidden">périmé</span>
+        <button id="inv-refresh" type="button">Rafraîchir par agents</button>
+        <button id="inv-save" class="primary" type="button">Enregistrer les drapeaux</button>
+      </div>
+      <p id="inv-msg" class="hint"></p>
+      <div class="table-wrap">
+        <table id="inv-table">
+          <thead>
+            <tr><th>Hôtel</th><th>Source</th><th>★</th><th>Note</th><th>Dist. (km)</th><th>Prix dès (€)</th><th>Paiement société</th><th>Contracté</th><th>Préféré</th><th>Exclu</th></tr>
+          </thead>
+          <tbody id="inv-body"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Ajout manuel</h2>
+      <div class="inv-add">
+        <label>Nom <input id="inv-add-name" type="text" spellcheck="false"></label>
+        <label>URL Booking <input id="inv-add-url" type="url" spellcheck="false"></label>
+        <label>Téléphone <input id="inv-add-phone" type="text" spellcheck="false"></label>
+        <label>E-mail <input id="inv-add-email" type="email" spellcheck="false"></label>
+        <label class="checkline"><input id="inv-add-contracted" type="checkbox"> Contracté</label>
+        <button id="inv-add-btn" class="primary" type="button">Ajouter</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="lightbox" class="lightbox hidden">
+  <img id="lightbox-img" alt="Capture d'écran de l'agent">
+  <button id="lightbox-close" type="button">Fermer ✕</button>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

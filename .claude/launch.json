@@ -1,6 +1,11 @@
 {
-  "name": "demo-bkk",
-  "runtimeExecutable": "node",
-  "runtimeArgs": ["demo/server.mjs"],
-  "port": 4310
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo-bkk",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["demo/server.mjs"],
+      "port": 4310
+    }
+  ]
 }
