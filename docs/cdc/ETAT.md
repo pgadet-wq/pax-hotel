@@ -6,7 +6,7 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 
 - Phase : 5 — Câblage réel et probes
 - Statut : non démarrée (phase 4 terminée le 15/09)
-- Dernier commit : `feat(phase-4): serveur, SSE, UI vanilla, mode simulation BKK` (à pousser sur `origin/main`)
+- Dernier commit : `feat(phase-4): serveur, SSE, UI vanilla, mode simulation BKK` (poussé sur `origin/main`)
 
 ## Fait
 
