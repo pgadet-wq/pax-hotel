@@ -140,12 +140,15 @@ test("CLI inventaire : --dry-run NOU — zone Nouméa, URL sans distance=, aucun
   assert.equal(fs.readFileSync(path.join(INVENTAIRE_DIR, "NOU.json"), "utf8"), avant);
 });
 
-test("CLI inventaire : options payantes refusées avant la phase 3", () => {
-  for (const args of [["--station", "BKK", "--refresh"], ["--station", "BKK", "--max", "10"], ["--station", "BKK"]]) {
+test("CLI inventaire : Étage 0 par agents gardé par DEMO_ALLOW_PAID (INV-8, phase 3)", () => {
+  for (const args of [["--station", "BKK", "--refresh"], ["--station", "BKK", "--max", "10"]]) {
     const r = run(...args);
     assert.equal(r.status, 1, `attendu refus pour ${args.join(" ")}`);
-    assert.match(r.stderr, /non disponible avant la phase 3/);
+    assert.match(r.stderr, /refusé \(INV-8\)/);
   }
+  const sans = run("--station", "BKK");
+  assert.equal(sans.status, 1);
+  assert.match(sans.stderr, /préciser un mode/);
 });
 
 test("CLI inventaire : --offline fusionne les fixtures sans toucher l'entrée manuelle (critère d'acceptation)", () => {

@@ -18,9 +18,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadStation } from "../lib/stations.mjs";
-import { loadInventaire, mergeInventaire, normalizeInventaire, isStale, INVENTAIRE_DIR } from "../lib/inventaire.mjs";
+import { loadInventaire, mergeInventaire, normalizeInventaire, isStale, slugify, INVENTAIRE_DIR } from "../lib/inventaire.mjs";
 import { buildNflt, buildSearchUrl, buildHotelUrl } from "../lib/hai-urls.mjs";
 import { DEFAULT_POLICY } from "../lib/policy.mjs";
+import { newRunId } from "../lib/scenario.mjs";
+import { mkEmitter } from "../lib/events.mjs";
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(`--${name}`);
@@ -31,9 +33,12 @@ const opt = (name, dflt) => {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-if (flag("refresh") || opt("max", null) !== null) {
-  console.error("non disponible avant la phase 3 : l'Étage 0 par agents (--refresh, --max) est payant et sera câblé en phase 3.");
-  console.error("Options hors ligne disponibles : --dry-run, --offline <fixtures.json>.");
+// Étage 0 par agents (--refresh, --max) : PAYANT — garde INV-8, réservé aux phases 5-6.
+const wantsRefresh = flag("refresh") || opt("max", null) !== null;
+if (wantsRefresh && process.env.DEMO_ALLOW_PAID !== "1") {
+  console.error("refusé (INV-8) : --refresh/--max lancent des sessions d'agents PAYANTES (Étage 0).");
+  console.error("Réservé aux phases 5-6, sur demande explicite : exporter DEMO_ALLOW_PAID=1 pour l'autoriser.");
+  console.error("Modes gratuits : --dry-run, --offline <fixtures.json>.");
   process.exit(1);
 }
 
@@ -104,6 +109,88 @@ if (offline) {
   process.exit(0);
 }
 
-console.error("non disponible avant la phase 3 : sans --dry-run ni --offline, l'outil lancerait l'Étage 0 par agents (payant).");
-console.error("Options hors ligne disponibles : --dry-run, --offline <fixtures.json>.");
-process.exit(1);
+/* --------------------------------------- Étage 0 par agents (EX-INV-5, payant) */
+
+if (!wantsRefresh) {
+  console.error("préciser un mode : --dry-run, --offline <fixtures.json>, ou --refresh [--max n] (payant, DEMO_ALLOW_PAID=1).");
+  process.exit(1);
+}
+
+const MAX = Number(opt("max", "10"));
+if (!Number.isInteger(MAX) || MAX < 1 || MAX > 15) throw new Error(`--max doit être un entier de 1 à 15 (reçu : ${opt("max", "10")})`);
+
+const { createClient, ensureAgentV2, agentNameV2, inventaireHotelSchema, promptInventaireHotel, toInventaireEntry, pumpToCompletion } = await import("../lib/hai.mjs");
+const { runDiscovery } = await import("../lib/discovery.mjs");
+
+const runId = newRunId();
+const groupId = `inv-${station.code.toLowerCase()}-${runId}`; // EX-INV-7
+const emit = mkEmitter({ run_id: runId }, (ev) => {
+  const d = ev.data;
+  if (ev.type === "warning") console.log(`[warn ] ${d.message}`);
+  else if (ev.type === "phase") console.log(`[phase] ${d.phase}${d.done ? ` terminé (${d.count ?? ""})` : ""}`);
+  else if (ev.type === "agent_status" && d.status) console.log(`[agent] ${ev.hotel_key ?? "?"} : ${d.status}`);
+  else if (ev.type === "candidate") console.log(`[cand ] ${d.name} (${d.stars ?? "?"}★, ${d.review_score ?? "?"}/10)`);
+});
+
+console.log(`Étage 0 — inventaire ${station.code} par agents (groupe ${groupId}, max ${MAX} hôtels, référence ${CHECKIN} → ${CHECKOUT})`);
+const client = createClient();
+
+/* 1. découverte (logique Étage A : 1 session, 2 passes) */
+const disc = await runDiscovery({ client, policy, station, checkin: CHECKIN, checkout: CHECKOUT, groupId, emit });
+const candidats = disc.candidates.slice(0, MAX);
+if (!candidats.length) {
+  console.error("découverte sans candidat : inventaire inchangé (replis de la fiche escale disponibles au run).");
+  process.exit(1);
+}
+
+/* 2. un relevé d'inventaire court par candidat — concurrence 3, décalage 25 s (EX-INV-5) */
+await ensureAgentV2(client, station, policy);
+const queue = [...candidats];
+const entries = [];
+let started = 0;
+async function worker() {
+  for (;;) {
+    const cand = queue.shift();
+    if (!cand) return;
+    const delay = started * 25000;
+    started += 1;
+    if (delay > 0) await new Promise((r) => setTimeout(r, Math.min(delay, 25000)));
+    const hotelKey = slugify(cand.name);
+    const url = cand.url ? buildHotelUrl(cand.url, { checkin: CHECKIN, checkout: CHECKOUT }) : null;
+    try {
+      const handle = await client.startSession({
+        agent: agentNameV2(station),
+        messages: promptInventaireHotel({ hotelName: cand.name, hasStartUrl: Boolean(url), checkin: CHECKIN, checkout: CHECKOUT }),
+        maxSteps: 30,
+        maxTimeS: 600,
+        groupId,
+        answerSchema: inventaireHotelSchema,
+        ...(url ? { overrides: { "agent.environments[kind=web].start_url": url } } : {}),
+      });
+      const result = await pumpToCompletion(handle, (type, data) => emit(type, data, { hotel_key: hotelKey, session_id: handle.id }));
+      let flat = result.answer;
+      if (typeof flat === "string") {
+        try { flat = JSON.parse(flat); } catch { flat = null; }
+      }
+      const entry = toInventaireEntry(flat, { id: hotelKey });
+      if (entry) entries.push(entry);
+      else emit("warning", { message: `« ${cand.name} » : relevé d'inventaire sans résultat (${result.error ?? flat?.notes ?? "found=false"})` });
+    } catch (err) {
+      emit("warning", { message: `« ${cand.name} » : session d'inventaire en échec (${err?.message ?? err})` });
+    }
+  }
+}
+await Promise.all(Array.from({ length: 3 }, () => worker()));
+
+/* 3. fusion et écriture (EX-INV-6) */
+const fresh = normalizeInventaire({
+  station: station.code,
+  updated_at: new Date().toISOString(),
+  reference: { checkin: CHECKIN, nights: NIGHTS },
+  hotels: entries,
+}, "inventaire Étage 0");
+const merged = mergeInventaire(existing, fresh);
+const dest = path.join(INVENTAIRE_DIR, `${station.code}.json`);
+fs.mkdirSync(INVENTAIRE_DIR, { recursive: true });
+fs.writeFileSync(dest, JSON.stringify(merged, null, 2) + "\n", "utf8");
+console.log(`Écrit ${dest} — ${merged.hotels.length} hôtel(s), ${entries.length} relevé(s) frais (groupe ${groupId}).`);

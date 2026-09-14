@@ -75,10 +75,13 @@ test("offline : messages FR/EN et coût sur le plan des fixtures", () => {
   assert.match(md, /prix relevé le 2026-08-31/);
 });
 
-test("INV-7 : aucun module de la phase 1 n'importe hai-agents", () => {
+test("INV-7 : seul lib/hai.mjs importe hai-agents (zod et hai-agents restent sous hai-admin-mcp/)", () => {
   const libDir = path.join(ROOT, "hai-admin-mcp", "lib");
   for (const f of fs.readdirSync(libDir)) {
+    if (f === "hai.mjs") continue; // module SDK dédié (phase 3)
     const src = fs.readFileSync(path.join(libDir, f), "utf8");
     assert.ok(!/from\s+["']hai-agents["']/.test(src), `${f} importe hai-agents`);
   }
+  const hai = fs.readFileSync(path.join(libDir, "hai.mjs"), "utf8");
+  assert.ok(/from\s+["']hai-agents["']/.test(hai), "hai.mjs doit porter l'intégration SDK");
 });

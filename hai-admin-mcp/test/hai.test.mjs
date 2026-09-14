@@ -1,0 +1,116 @@
+/**
+ * Tests hai (CDC §5.6, §6.5) : schémas plats, convertisseurs (payment, cap_reached,
+ * observed_at), prompts FR — garde-fous INV-1/INV-2 et EX-PRO-1 (aucune valeur
+ * passager dans aucun prompt).
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  releveSchema, discoverySchema, probeSchema, inventaireHotelSchema,
+  toReleveAnswer, toDiscoveryCandidates, toInventaireEntry, agentNameV2,
+  promptDiscovery, promptReleve, promptProbe, promptInventaireHotel, buildNflt,
+} from "../lib/hai.mjs";
+import { generatePassengers } from "../lib/passagers.mjs";
+import { DEFAULT_POLICY } from "../lib/policy.mjs";
+import { loadStation } from "../lib/stations.mjs";
+
+const flatReleve = {
+  hotel: "Hyatt Regency", found: true, currency: "EUR",
+  stars: 5, review_score: 8.9, review_count: 2148, distance_km: 1.5,
+  amenity_wifi: true, amenity_room_service: "24h", amenity_workspace: "oui",
+  amenity_shuttle: "gratuite", amenity_restaurant_late: true, amenity_accessible: true,
+  payment_prepayment_online: "oui", payment_pay_at_property_only: "non",
+  rooms: [
+    { room_type: "Twin", occupancy_adults: 2, occupancy_children: 0, quantity_available: 9, cap_reached: true, price_per_night: 151, free_cancellation: true, breakfast_included: false, family_capable: false },
+  ],
+  notes: "",
+};
+
+test("hai : releveSchema accepte la réponse plate ; toReleveAnswer reconstruit le relevé v2 (§5.6)", () => {
+  assert.equal(releveSchema.safeParse(flatReleve).success, true);
+  const a = toReleveAnswer(flatReleve, { url: "https://www.booking.com/hotel/th/h.html", checkin: "2026-10-04", checkout: "2026-10-05", observedAt: "2026-10-03T08:00:00Z" });
+  assert.equal(a.payment.prepayment_online, "oui");
+  assert.equal(a.payment.pay_at_property_only, false); // enum « non » → false
+  assert.equal(a.observed_at, "2026-10-03T08:00:00Z"); // EX-REL-2, horodaté côté code
+  assert.equal(a.rooms[0].quantity_displayed_max, 9);
+  assert.equal(a.rooms[0].cap_reached, true);
+  assert.equal(a.price_currency, "EUR");
+  // horodatage automatique si absent
+  assert.ok(toReleveAnswer(flatReleve, {}).observed_at.includes("T"));
+  // pay_at_property non précisé → null
+  const np = toReleveAnswer({ ...flatReleve, payment_pay_at_property_only: "non_precise" }, {});
+  assert.equal(np.payment.pay_at_property_only, null);
+  assert.equal(toReleveAnswer(null, {}), null);
+});
+
+test("hai : probeSchema et inventaireHotelSchema valident leurs réponses plates", () => {
+  assert.equal(probeSchema.safeParse({ hotel: "H", found: true, requested_rooms: 12, rooms_selectable_max: 14, cap_reached: false, notes: "" }).success, true);
+  const flat = {
+    hotel: "H", found: true, url: "https://www.booking.com/hotel/th/h.html", stars: 4, review_score: 8.1, review_count: 3120,
+    distance_km: 1.2, amenity_wifi: true, amenity_room_service: "24h", amenity_workspace: "oui", amenity_shuttle: "gratuite",
+    amenity_restaurant_late: true, amenity_accessible: true, breakfast_available: true, family_capable: true,
+    payment_prepayment_online: "oui", payment_pay_at_property_only: "non", indicative_price_from_eur: 92,
+    rooms_displayed_max: 9, cap_reached: true, notes: "",
+  };
+  assert.equal(inventaireHotelSchema.safeParse(flat).success, true);
+  const entry = toInventaireEntry(flat, { id: "h-test", observedAt: "2026-09-15T10:00:00Z" });
+  assert.equal(entry.id, "h-test");
+  assert.equal(entry.amenities.breakfast_available, true);
+  assert.deepEqual(entry.capacity_hint, { rooms_displayed_max: 9, cap_reached: true, observed_at: "2026-09-15T10:00:00Z" });
+  assert.equal(toInventaireEntry({ ...flat, found: false }, { id: "x" }), null);
+});
+
+test("hai : toDiscoveryCandidates normalise les cartes (0 → null, badges → liste)", () => {
+  const flat = { currency: "EUR", candidates: [{ name: "A", url: "", stars: 0, review_score: 8.2, price_from_per_night: 0, distance_km: -1, badges: "Wifi, Navette", premium_pass: true }], notes: "" };
+  assert.equal(discoverySchema.safeParse(flat).success, true);
+  const [c] = toDiscoveryCandidates(flat);
+  assert.equal(c.stars, null);
+  assert.equal(c.price_from_per_night, null);
+  assert.equal(c.distance_km, null);
+  assert.deepEqual(c.amenities_seen, ["Wifi", "Navette"]);
+  assert.equal(c.premium_pass, true);
+});
+
+test("hai : agent v2 nommé par escale, v1 intacte (INV-6)", () => {
+  assert.equal(agentNameV2(loadStation("BKK")), "hotel-scout-bkk-v2");
+  assert.equal(agentNameV2(loadStation("NOU")), "hotel-scout-nou-v2");
+});
+
+test("prompts : garde-fous INV-1/INV-2 présents dans chaque squelette (§6.5)", () => {
+  const station = loadStation("BKK");
+  const nflt = buildNflt(DEFAULT_POLICY, station);
+  const prompts = [
+    promptDiscovery({ station, checkin: "2026-10-04", checkout: "2026-10-05", nflt }),
+    promptReleve({ hotelName: "Hyatt Regency", hasStartUrl: true, checkin: "2026-10-04", checkout: "2026-10-05" }),
+    promptReleve({ hotelName: "Hyatt Regency", hasStartUrl: false, checkin: "2026-10-04", checkout: "2026-10-05" }),
+    promptProbe({ hotelName: "Hyatt Regency", requestedRooms: 12, checkin: "2026-10-04", checkout: "2026-10-05" }),
+    promptInventaireHotel({ hotelName: "Hyatt Regency", hasStartUrl: true, checkin: "2026-10-04", checkout: "2026-10-05" }),
+  ];
+  for (const p of prompts) {
+    assert.match(p, /réserver/i, "INV-1 : l'interdiction de réserver doit être rappelée");
+    assert.match(p, /CAPTCHA/, "INV-2 : la consigne CAPTCHA doit être rappelée");
+    assert.match(p, /outcome blocked/);
+  }
+  // la sonde ne mentionne qu'URL implicite + nombre de chambres (EX-EXT-5)
+  assert.match(prompts[3], /12 chambres/);
+  assert.match(prompts[3], /24 adultes/);
+});
+
+test("prompts : EX-PRO-1 — aucune valeur passager (pnr, nom, prénom, assistance, remarque) dans aucun prompt", () => {
+  const { rows } = generatePassengers({ seats: { J: 10, W: 8, Y: 40 }, seed: 42, fill: "exact" });
+  const station = loadStation("BKK");
+  const nflt = buildNflt(DEFAULT_POLICY, station);
+  const corpus = [
+    promptDiscovery({ station, checkin: "2026-10-04", checkout: "2026-10-05", nflt }),
+    promptReleve({ hotelName: "Novotel Bangkok Suvarnabhumi Airport", hasStartUrl: true, checkin: "2026-10-04", checkout: "2026-10-05" }),
+    promptProbe({ hotelName: "Novotel Bangkok Suvarnabhumi Airport", requestedRooms: 30, checkin: "2026-10-04", checkout: "2026-10-05" }),
+    promptInventaireHotel({ hotelName: "Novotel Bangkok Suvarnabhumi Airport", hasStartUrl: false, checkin: "2026-10-04", checkout: "2026-10-05" }),
+  ].join("\n---\n");
+  for (const row of rows) {
+    for (const col of ["pnr", "nom", "prenom", "assistance", "remarque"]) {
+      const val = String(row[col] ?? "").trim();
+      if (val.length < 3) continue; // vides et codes d'une lettre : non significatifs
+      assert.ok(!corpus.includes(val), `valeur passager « ${val} » (${col}) trouvée dans un prompt`);
+    }
+  }
+});

@@ -75,3 +75,28 @@ export const mkPax = (pnr, over = {}) => ({
   pnr, nom: "TEST", prenom: "Pax", type_pax: "ADT", age: "40",
   cabine: "Y", flying_blue: "NONE", assistance: "", remarque: "", ...over,
 });
+
+/** Entrée d'inventaire §5.3 complète (compatible J/W/Y par défaut). */
+export const mkInvEntry = (id, over = {}) => ({
+  id, name: `Hôtel ${id}`, url: `https://www.booking.com/hotel/th/${id}.html`, source: "agent",
+  contracted: false, preferred: false, excluded: false,
+  stars: 4, review_score: 8.0, review_count: 1000, distance_km: 2, distance_ref: "airport",
+  amenities: { wifi_free: true, room_service: "24h", workspace: "oui", airport_shuttle: "gratuite", restaurant_late: true, accessible: true, breakfast_available: true, family_capable: false },
+  payment: { prepayment_online: "oui", pay_at_property_only: false },
+  indicative_price_from_eur: 70, capacity_hint: null, contact: { phone: null, email: null },
+  notes: "", last_survey_at: "2026-09-14T09:00:00Z", ...over,
+});
+
+export const mkInv = (hotels, over = {}) => ({
+  station: "BKK", updated_at: "2026-09-14T09:30:00Z", reference: { checkin: "2026-09-28", nights: 1 }, hotels, ...over,
+});
+
+/** Enregistrement de relevé (format collect/fixtures) à partir d'un hôtel de mkHotel. */
+export const mkRecord = (id, over = {}, rooms = undefined) => {
+  const h = mkHotel(id, over.answerOver ?? {}, rooms ?? [mkRoom()]);
+  return {
+    hotel: id, hotelKey: id, name: h.answer.hotel, url: h.answer.url, tiers: over.tiers ?? ["J", "W", "Y"],
+    sessionId: `sess-${id}`, status: "completed", outcome: null, error: null, costUsd: over.costUsd ?? 0,
+    answer: h.answer,
+  };
+};
