@@ -6,7 +6,7 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 
 - Phase : 7 — Déploiement Scaleway (phases 5 et 6 terminées le 15/09)
 - Statut : non démarrée
-- Dernier commit : `docs(phase-6): recette, README, déroulé de démo` (tag `demo-v2-recette`, poussé sur `origin/main`)
+- Dernier commit : `feat(phase-5): fixtures réelles et captures réelles de simulation` (complément de clôture phase 5, poussé sur `origin/main` ; le tag `demo-v2-recette` reste sur le commit de recette)
 
 ## Fait
 
@@ -21,12 +21,13 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
   - `ensureAgentV2` : patch du modèle si l'agent existe avec un autre (la politique est source de vérité) ; journal du point d'entrée EU au démarrage du client (H-6 exercée).
   - `lib/inventaire.mjs` : `reconcileIds` (fusion sans doublon par URL/nom) ; `tools/inventaire.mjs --refresh` : mesures §13 + archives `out/` + captures ; `tools/rebooking-v2.mjs` : `--probe-discovery/--probe-releve/--probe-capacity/--probe-inventaire`.
   - **Étage 0 réel BKK exécuté** (accord donné en phase 5 ; le processus s'est achevé pendant la conversation phase 6) : `data/inventaire/BKK.json` → 9 hôtels `source: agent`, `payment` + `capacity_hint` partout (critère ≥ 8 atteint). Mesures : 693 s, 11 sessions (1 découverte + 10 relevés courts), 0,99 $, 0 × 429, concurrence 3/3 (config 3, stagger 25 s), 10/10 schémas valides, 7 exploitables. Archives : `out/{candidats,inventaire}-mu2gsy9c.json`, `out/captures-mu2gsy9c/`. Une découverte avait échoué avant retry (`mu2goptp`).
-  - Non fait (volontaire) : probes unitaires `--probe-releve`/`--probe-capacity` (H-3 non tranchée formellement) ; fixtures de simulation conservées telles quelles (voir Décisions).
+  - Non joués (volontaire) : probes unitaires `--probe-releve`/`--probe-capacity` (H-3 non tranchée formellement, → run réel).
+  - Complément commité après la recette (même journée, conversation phase 5 achevée) : `data/simulate/inventaire-reel-bkk.json` — les 7 relevés réels reformatés en fixtures §5.3 rejouables par `tools/inventaire.mjs --offline` (2 tests dédiés) — et les 4 PNG `demo/sim-assets/` remplacés par de VRAIES captures du run `mu2gsy9c` (résultats filtrés, fiche, tableau des chambres, paiement rognée hors bandeau cookies). La chorégraphie de simulation (`releves-demo.json`, `inventaire-demo.json`, 157/0 en ~90 s) reste inchangée.
 - Phase 6 (15/09) — recette, doc, déroulé : `npm test` 159 verts (3 tests qui figeaient l'inventaire POC — `cli-v2`, `inventaire`, `pipeline` — dérivent désormais du fichier livré, l'inventaire réel les ayant invalidés) ; `--offline` conforme (88 OK + 69 escalades, inchangé : les fixtures pilotent) ; recette UI simulation complète consignée dans `docs/recette-demo-v2.md` (87 s, snapshot, 409, annulation propre, 501 INV-8 sans DEMO_ALLOW_PAID) ; README section « Démo v2 » ; `docs/matrice-affectation.md` v2 (tiers/surcouches/conformité/règlement/extension, v1 en annexe) ; `docs/deroule-demo.md` (8 étapes, plan B simulation, réglages, points à ne pas montrer), joué une fois en simulation sans accroc. **Run complet réel NON joué** (décision explicite de l'utilisateur) → reporté phase 7.
 
 ## En cours
 
-- Rien. (Un téléchargement de captures du refresh d'inventaire pouvait encore tourner en tâche de fond le 15/09 au soir — sans incidence, sorties sous `out/`, ignoré par git.)
+- Rien. (Les tâches de fond du 15/09 — Étage 0 réel et rapatriement des captures — sont terminées : 98/99 captures sous `out/captures-mu2gsy9c/`.)
 
 ## Décisions prises
 
@@ -37,13 +38,13 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 - Phase 4 — sécurité : captures par `{hotel_key, seq}` résolues serveur (`Cache-Control: private`), CSP `default-src 'self'` ; `sim_speed` hors schéma ; liste téléversée en mémoire process.
 - Phase 5 — H-9 : les ids de MODÈLE sont `holo3-122b-a10b` (le plus capable, agents A/B) et `holo3-1-35b-a3b` (classe flash, sonde) — `h/web-surfer-*` sont des AGENTS ; un modèle inconnu fait échouer la session à 0 step. Défauts de `DEFAULT_POLICY.agents` réglés ainsi ; `ensureAgentV2` réaligne par patch.
 - Phase 5 — bearer relayé UNIQUEMENT vers l'origine `apiOrigin()` (redirection S3 suivie sans Authorization) ; garde INV-8 déplacée côté serveur (`DEMO_ALLOW_PAID=1` au démarrage).
-- Phase 6 — fixtures de simulation VOLONTAIREMENT inchangées (calibrées pour le plan B de démo : 157/0 en 90 s) ; les sorties réelles restent archivées sous `out/` (non commitées), l'inventaire réel BKK est commité (aucune donnée passager). « Probes réels archivés comme fixtures » (§12.3 p.4) est couvert par BKK.json + archives `out/`.
+- Phase 6 — fixtures de simulation VOLONTAIREMENT inchangées (calibrées pour le plan B de démo : 157/0 en 90 s) ; les sorties réelles restent archivées sous `out/` (non commitées), l'inventaire réel BKK est commité (aucune donnée passager). « Probes réels archivés comme fixtures » (§12.3 p.4) est couvert par BKK.json + archives `out/` — et, depuis le complément phase 5, par `data/simulate/inventaire-reel-bkk.json` (fichier SÉPARÉ : la chorégraphie de démo n'en dépend pas).
 - Phase 6 — clôture en DEUX commits : `feat(phase-5): câblage réel, inventaire BKK réel, probes` (rattrapage, sans « fixtures réelles » — non faites), puis `docs(phase-6): recette, README, déroulé de démo` + tag `demo-v2-recette` (commit → tag → push, l'ordre littéral de la fiche taggerait l'avant-commit).
 - Run réel : lancé uniquement sur accord explicite dans la conversation, `DEMO_ALLOW_PAID=1` pour la commande seule (INV-8) — non joué en phase 6, à jouer en phase 7 (répétition générale, fiche : un run simulé + un run réel distant).
 
 ## Écarts d'arborescence vs CDC §4
 
-- En plus : `hai-admin-mcp/package-lock.json` ; `out/*` (local, ignoré) ; `test/helpers.mjs` ; `test/phase0.test.mjs` ; `lib/hai-urls.mjs` ; `lib/pipeline.mjs` ; `demo/sim-assets/*.png` ; `demo/inventaire-refresh.mjs` ; `data/presets/politique-standard.json` ; `docs/{recette-demo-v2,deroule-demo}.md` ; dry-run via `POST /api/run {dry_run:true}`.
+- En plus : `hai-admin-mcp/package-lock.json` ; `out/*` (local, ignoré) ; `test/helpers.mjs` ; `test/phase0.test.mjs` ; `lib/hai-urls.mjs` ; `lib/pipeline.mjs` ; `demo/sim-assets/*.png` (4 captures RÉELLES depuis la ph. 5) ; `demo/inventaire-refresh.mjs` ; `data/presets/politique-standard.json` ; `data/simulate/inventaire-reel-bkk.json` ; `docs/{recette-demo-v2,deroule-demo}.md` ; dry-run via `POST /api/run {dry_run:true}`.
 - `hai-admin-mcp/package.json` : `main`/`bin` → `src/server.mjs` absent (référence morte assumée, POC intact).
 
 ## Environnement (H-8, relevé le 14/09)
@@ -79,7 +80,7 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 
 ## Vérification
 
-- `npm test` : OK (159 cas, 15/09 phase 6)
+- `npm test` : OK (161 cas, 15/09 — les 159 de la recette + 2 tests des fixtures réelles)
 - `rebooking-v2 --offline` : OK (15/09, 88 OK + 69 escalades, 0 €) · `tools/inventaire.mjs --refresh` réel : OK (15/09, 9 hôtels BKK)
 - Recette UI simulation (15/09, navigateur) : complète — voir `docs/recette-demo-v2.md` §2
 - Run complet réel : NON JOUÉ (phase 7)
