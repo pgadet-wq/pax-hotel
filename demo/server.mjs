@@ -504,10 +504,18 @@ export function createDemoServer(opts = {}) {
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  const app = createDemoServer();
+  // CDC §17 : en service systemd, PORT et BIND viennent de /etc/pax-hotel.env (EnvironmentFile).
+  const bind = process.env.BIND || "127.0.0.1";
+  const portRaw = process.env.PORT || "4310";
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error(`PORT invalide : « ${portRaw} » (entier 1-65535 attendu)`);
+    process.exit(1);
+  }
+  const app = createDemoServer({ host: bind, port });
   const addr = await app.listen();
   console.log(
-    `Démo v2 — http://127.0.0.1:${addr.port} (simulation BKK gratuite ; run réel et Étage 0 par agents : ` +
+    `Démo v2 — http://${addr.address}:${addr.port} (simulation BKK gratuite ; run réel et Étage 0 par agents : ` +
       `${paidAllowed() ? "AUTORISÉS (DEMO_ALLOW_PAID=1, sessions payantes)" : "verrouillés — INV-8, démarrer avec DEMO_ALLOW_PAID=1 après accord explicite"})`,
   );
 }

@@ -1,0 +1,25 @@
+# /etc/caddy/Caddyfile — démo pax-hotel v2 (phase 7, CDC §17). Posé par deploy/install.sh.
+#
+# À renseigner avant `systemctl reload caddy` :
+#   1. L'ADRESSE du site : remplacer demo.exemple.fr par votre domaine (enregistrement A vers
+#      l'IP publique de l'instance). Certificat Let's Encrypt automatique par défi TLS-ALPN
+#      sur 443 — le port 80 peut rester fermé (groupe de sécurité : 22 et 443 seulement).
+#      SANS domaine : mettre https://IP.PU.BLI.QUE et décommenter `tls internal`
+#      (certificat auto-signé, avertissement navigateur à accepter une fois).
+#   2. Le HACHAGE bcrypt du mot de passe : générer sur l'instance avec `caddy hash-password`,
+#      coller la sortie ci-dessous. L'identifiant de connexion est `demo` (modifiable).
+#
+# Le serveur Node reste lié à 127.0.0.1:4310 — jamais exposé (interdit de la fiche phase 7).
+
+demo.exemple.fr {
+	# tls internal   # à décommenter UNIQUEMENT si l'adresse ci-dessus est une IP (pas de domaine)
+
+	basic_auth {
+		demo REMPLACER_PAR_HACHAGE_BCRYPT
+	}
+
+	reverse_proxy 127.0.0.1:4310 {
+		# SSE (/api/events) : aucune mise en tampon, chaque événement part immédiatement (fiche phase 7)
+		flush_interval -1
+	}
+}

@@ -1,0 +1,28 @@
+# Service systemd de la démo pax-hotel v2 (phase 7, CDC §17).
+# Installé par deploy/install.sh dans /etc/systemd/system/pax-hotel.service.
+# Secrets et réglages (HAI_API_KEY, PORT, BIND…) : /etc/pax-hotel.env, root:root mode 600.
+[Unit]
+Description=Démo pax-hotel v2 (Node, lié à 127.0.0.1:4310, exposé par Caddy seul)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paxhotel
+Group=paxhotel
+WorkingDirectory=/opt/pax-hotel
+EnvironmentFile=/etc/pax-hotel.env
+ExecStart=/usr/bin/node /opt/pax-hotel/demo/server.mjs
+Restart=always
+RestartSec=3
+
+# Durcissement : tout le système en lecture seule pour le service, sauf
+# out/ (artefacts de runs) et data/ (inventaire rafraîchi, presets enregistrés).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/pax-hotel/out /opt/pax-hotel/data
+
+[Install]
+WantedBy=multi-user.target
