@@ -2,6 +2,80 @@
 
 Ce pack contient tout ce dont Claude Code a besoin pour construire la démo v2 de l'outil d'hébergement d'urgence, en sept phases, une conversation par phase.
 
+## Démo v2 — mode d'emploi
+
+Outil de démonstration : à partir d'une liste passagers (A350-900 plein, 324 passagers), des agents web Holo
+(H Company, SDK `hai-agents`) relèvent des hôtels sur Booking et le code construit un plan d'hébergement par
+passager — conformité, mode de règlement, coût, messages FR/EN. Escale de démonstration : Bangkok (BKK).
+Déroulé pas à pas : [docs/deroule-demo.md](docs/deroule-demo.md) · règles d'affectation :
+[docs/matrice-affectation.md](docs/matrice-affectation.md) · recette : [docs/recette-demo-v2.md](docs/recette-demo-v2.md).
+
+### Installation
+
+1. Node ≥ 22 (ESM, aucun build). Dépendances confinées sous `hai-admin-mcp/` : `cd hai-admin-mcp && npm ci`.
+2. Clé Agents API H dans l'environnement (`HAI_API_KEY`) ou dans `~/.config/hai/.env` — jamais dans le dépôt (INV-4).
+3. `npm test` depuis la racine doit être vert avant toute démo.
+
+### Variables d'environnement
+
+| Variable | Rôle |
+|---|---|
+| `HAI_API_KEY` | clé Agents API H Company (serveur uniquement, jamais commitée) |
+| `HAI_API_BASE_URL` | optionnelle — origine de l'API (défaut : point d'entrée européen `https://agp.eu.hcompany.ai`, journalisé au démarrage du client) |
+| `DEMO_ALLOW_PAID` | `1` pour déverrouiller les sessions payantes (run réel, Étage 0 par agents), exportée pour la commande seule, après accord explicite — sans elle le serveur répond 501 (INV-8) |
+
+### Commandes
+
+```
+npm test                                              # node --test (159 cas, hors ligne, 0 €)
+node demo/server.mjs                                  # UI http://127.0.0.1:4310 — simulation et dry-run seulement
+DEMO_ALLOW_PAID=1 node demo/server.mjs                # idem + run réel et Étage 0 par agents déverrouillés
+node hai-admin-mcp/tools/rebooking-v2.mjs --dry-run   # URLs et plan d'exécution, aucun agent
+node hai-admin-mcp/tools/rebooking-v2.mjs --offline data/simulate/releves-demo.json   # rejeu fixtures, 0 €
+node hai-admin-mcp/tools/inventaire.mjs --station BKK --dry-run       # Étage 0 sans agent
+DEMO_ALLOW_PAID=1 node hai-admin-mcp/tools/inventaire.mjs --station BKK --refresh --max 10  # Étage 0 réel (payant)
+```
+
+Probes unitaires payants (phase 5) : `rebooking-v2 --probe-discovery | --probe-releve <n> | --probe-capacity <url> --rooms <n>`, toujours derrière `DEMO_ALLOW_PAID=1`.
+
+### Mode simulation (filet de sécurité de la démo)
+
+Case « Mode démonstration (sans agents) » de l'UI : run complet en ~90 s, 0 €, fixtures BKK + captures factices,
+pensées FR, extension vague 1 (sonde + relevé), 157 dossiers logés / 0 escalade. Vitesse ×1/×5/×20.
+Disponible pour BKK uniquement (CDG/NOU : dry-run et message explicite). Rechargement d'onglet → snapshot complet ;
+double-run → 409 ; annulation propre (plan conservé en l'état).
+
+### Onglet Inventaire (Étage 0)
+
+Lit/écrit `data/inventaire/{CODE}.json` par escale : hôtels `source: agent | manuel | secours`, note, distance,
+prix d'appel, paiement société (`oui / non / a_confirmer`), drapeaux contracté / préféré / exclu, ajout manuel.
+« Rafraîchir par agents » relance découverte + relevés courts (payant, derrière `DEMO_ALLOW_PAID=1`) avec
+réconciliation des doublons ; l'inventaire est réputé périmé après 30 jours (H-4, éditable). L'inventaire BKK
+réel (9 hôtels, relevé du 15/09) est commité — il ne contient aucune donnée passager.
+
+### Escales
+
+`data/stations/{BKK,CDG,NOU}.json` : zone de recherche, rayon, transfert (NOU : navette 75 min),
+facteur de plafond (`price_cap_factor`, CDG 1.0 — H-5). L'UI affiche la fiche de l'escale choisie ;
+le plafond effectif par cabine = plafond politique × facteur.
+
+### Bornes d'extension (Étage C, H-2)
+
+Éditables dans le formulaire, visibles en permanence dans le bandeau : `max_sessions_per_run` 18,
+`max_cost_usd_per_run` 10 $, `max_waves` 4, sonde ≤ `probe_no_rooms_max` 30 chambres, `batch_size` auto.
+L'arrêt (borne atteinte ou annulation de l'extension seule) laisse le plan en l'état avec escalade chiffrée.
+
+### Limites connues
+
+- Prix publics Booking uniquement (INV-3), « borne basse » : « Only X left » plafonne ce qu'un agent voit — la sonde
+  (`no_rooms`) repousse ce plafond sans le supprimer ; aucune réservation n'est faite (INV-1).
+- Équipements / paiement « déclarés par la plateforme » : `non_precise` = à confirmer (conformité PARTIELLE).
+- Anti-bot : repli filtres UI puis proxy géré ; un CAPTCHA arrête la session (`blocked`), jamais de contournement (INV-2).
+- Simulation disponible pour BKK seulement ; CDG/NOU exigent un run réel ou le dry-run.
+- Un seul run à la fois (INV-10) ; indemnités repas/transport « non renseigné » tant que la politique ne les fixe pas (H-7).
+- La sonde de capacité réelle (H-3) reste à confirmer sur un vrai cas de plafond en run réel ; si elle se révèle
+  non concluante : `probe_same_hotel_first = false` (extension par candidats suivants seulement).
+
 ## Contenu
 
 ```
