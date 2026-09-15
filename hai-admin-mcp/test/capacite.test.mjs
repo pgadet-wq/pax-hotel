@@ -115,3 +115,70 @@ test("capacite : applyProbeResult borne les types plafonnés sans muter l'entré
   assert.equal(applyProbeResult(inv, "plein", { found: true, rooms_selectable_max: -1 })[0].answer.rooms[0].rooms_available_max, undefined);
   assert.equal(applyProbeResult(inv, "autre", { found: true, rooms_selectable_max: 9 })[0], inv[0]);
 });
+
+/* ------------------------------------------- phase 5 : runProbe côté client */
+
+test("capacite : runProbe — start_url de sonde + modèle flash par override (§16), coût réel attaché", async () => {
+  const { runProbe } = await import("../lib/capacite.mjs");
+  const policy = politique();
+  let startArgs = null;
+  const client = {
+    agents: { getAgent: async () => ({ name: "hotel-scout-bkk-v2", model: policy.agents.model_stage_ab }) },
+    async startSession(args) {
+      startArgs = args;
+      return {
+        id: "sess-probe",
+        async *stream() {
+          yield { type: "MetricsUpdateEvent", data: { metrics: { steps: 7, totalCost: 0.11, costPerModel: [] } } };
+        },
+        async waitForCompletion() {
+          return {
+            id: "sess-probe", status: "completed", outcome: "success",
+            answer: { hotel: "novotel", found: true, requested_rooms: 12, rooms_selectable_max: 14, cap_reached: false, notes: "" },
+          };
+        },
+        async cancel() {},
+      };
+    },
+  };
+  const events = [];
+  const answer = await runProbe({
+    client, policy, station: STATION_BKK,
+    probe: { hotelKey: "novotel", name: "novotel", url: "https://www.booking.com/hotel/th/novotel.html", requested_rooms: 12 },
+    checkin: "2026-10-04", checkout: "2026-10-05", groupId: "g", emit: (type, data) => events.push({ type, data }),
+  });
+  assert.match(startArgs.overrides["agent.environments[kind=web].start_url"], /no_rooms=12/);
+  assert.match(startArgs.overrides["agent.environments[kind=web].start_url"], /group_adults=24/);
+  assert.equal(startArgs.overrides["agent.model"], "holo3-1-35b-a3b"); // §16 : sonde en classe flash (Holo3.1 35B)
+  assert.equal(startArgs.maxSteps, 20);
+  assert.equal(answer.rooms_selectable_max, 14);
+  assert.equal(answer.costUsd, 0.11); // EX-EXT-2 : agrégé au coût du run
+  assert.equal(answer.sessionId, "sess-probe");
+  assert.ok(events.some((e) => e.type === "probe" && e.data.result?.rooms_available_max === 14));
+});
+
+test("capacite : runProbe — model_probe « auto » : aucun override de modèle", async () => {
+  const { runProbe } = await import("../lib/capacite.mjs");
+  const policy = politique({ agents: { model_probe: "auto" } });
+  let startArgs = null;
+  const client = {
+    agents: { getAgent: async () => ({ name: "hotel-scout-bkk-v2", model: policy.agents.model_stage_ab }) },
+    async startSession(args) {
+      startArgs = args;
+      return {
+        id: "s",
+        async *stream() {},
+        async waitForCompletion() {
+          return { id: "s", status: "completed", answer: { hotel: "h", found: false, requested_rooms: 12, rooms_selectable_max: -1, cap_reached: false, notes: "" } };
+        },
+        async cancel() {},
+      };
+    },
+  };
+  await runProbe({
+    client, policy, station: STATION_BKK,
+    probe: { hotelKey: "h", name: "h", url: "https://www.booking.com/hotel/th/h.html", requested_rooms: 12 },
+    checkin: "2026-10-04", checkout: "2026-10-05", groupId: "g", emit: () => {},
+  });
+  assert.equal("agent.model" in startArgs.overrides, false);
+});

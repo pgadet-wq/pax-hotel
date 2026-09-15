@@ -117,7 +117,14 @@ export function applyProbeResult(inventories, hotelKey, probeAnswer) {
  * reçoit une URL et un nombre de chambres, rien d'autre (EX-EXT-5).
  */
 export async function runProbe({ client, policy, station, probe, checkin, checkout, groupId, emit, signal }) {
-  const scoped = (type, data, extra = {}) => emit(type, data, { hotel_key: probe.hotelKey, ...extra });
+  const usage = { steps: 0, costUsd: 0 };
+  const scoped = (type, data, extra = {}) => {
+    if (type === "metrics") {
+      usage.steps = data.steps ?? usage.steps;
+      usage.costUsd = data.cost_usd ?? usage.costUsd;
+    }
+    return emit(type, data, { hotel_key: probe.hotelKey, ...extra });
+  };
   if (!probe.url) {
     scoped("probe", { hotel: probe.hotelKey, requested_rooms: probe.requested_rooms, result: null, status: "skipped_no_url" });
     return null;
@@ -125,6 +132,9 @@ export async function runProbe({ client, policy, station, probe, checkin, checko
   const url = buildProbeUrl(probe.url, { checkin, checkout, noRooms: probe.requested_rooms });
   scoped("probe", { hotel: probe.hotelKey, requested_rooms: probe.requested_rooms, result: null, status: "starting" });
 
+  // §16 : sonde = tâche courte, une page → modèle rapide (classe flash), par override
+  // de session — l'agent v2 garde le modèle A/B pour la découverte et les relevés.
+  const modelProbe = policy?.agents?.model_probe && policy.agents.model_probe !== "auto" ? policy.agents.model_probe : null;
   let handle;
   try {
     await ensureAgentV2(client, station, policy);
@@ -135,7 +145,10 @@ export async function runProbe({ client, policy, station, probe, checkin, checko
       maxTimeS: 400,
       groupId,
       answerSchema: probeSchema,
-      overrides: { "agent.environments[kind=web].start_url": url },
+      overrides: {
+        "agent.environments[kind=web].start_url": url,
+        ...(modelProbe ? { "agent.model": modelProbe } : {}),
+      },
     });
   } catch (err) {
     scoped("probe", { hotel: probe.hotelKey, requested_rooms: probe.requested_rooms, result: null, status: `error: ${err?.message ?? err}` });
@@ -152,5 +165,11 @@ export async function runProbe({ client, policy, station, probe, checkin, checko
     result: answer?.found ? { rooms_available_max: answer.rooms_selectable_max, cap_reached: answer.cap_reached } : null,
     status: result.status,
   }, { session_id: handle.id });
+  if (answer && typeof answer === "object") {
+    // coût réel de la sonde (EX-EXT-2) : agrégé par la boucle d'extension du pipeline
+    answer.costUsd = usage.costUsd;
+    answer.steps = usage.steps;
+    answer.sessionId = handle.id;
+  }
   return answer;
 }

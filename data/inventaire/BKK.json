@@ -1,45 +1,90 @@
 {
   "station": "BKK",
-  "updated_at": "2026-08-31T04:00:00Z",
-  "reference": { "checkin": "2026-09-01", "nights": 1 },
+  "updated_at": "2026-09-15T09:35:30.036Z",
+  "reference": {
+    "checkin": "2026-09-29",
+    "nights": 1
+  },
   "hotels": [
     {
       "id": "hyatt-regency-bkk-airport",
       "name": "Hyatt Regency Bangkok Suvarnabhumi Airport",
-      "url": "https://www.booking.com/hotel/th/hyatt-regency-bangkok-suvarnabhumi-airport.html",
+      "url": "https://www.booking.com/hotel/th/hyatt-regency-bangkok-suvarnabhumi-airport.html?checkin=2026-09-29&checkout=2026-09-30&group_adults=2&no_rooms=1&group_children=0&selected_currency=EUR",
       "source": "agent",
-      "contracted": false, "preferred": false, "excluded": false,
-      "stars": 5, "review_score": 8.9, "review_count": 2148,
-      "distance_km": 1.5, "distance_ref": "airport",
+      "contracted": false,
+      "preferred": false,
+      "excluded": false,
+      "stars": 5,
+      "review_score": 8.4,
+      "review_count": 10393,
+      "distance_km": null,
+      "distance_ref": null,
       "amenities": {
-        "wifi_free": true, "room_service": "24h", "workspace": "oui",
-        "airport_shuttle": "gratuite", "restaurant_late": true, "accessible": true,
-        "breakfast_available": true, "family_capable": false
+        "wifi_free": true,
+        "room_service": "non_precise",
+        "workspace": "oui",
+        "airport_shuttle": "gratuite",
+        "restaurant_late": true,
+        "accessible": false,
+        "breakfast_available": true,
+        "family_capable": false
       },
-      "payment": { "prepayment_online": "oui", "pay_at_property_only": false },
+      "payment": {
+        "prepayment_online": "non_precise",
+        "pay_at_property_only": null,
+        "company_payment_possible": "a_confirmer"
+      },
       "indicative_price_from_eur": 129,
-      "capacity_hint": { "rooms_displayed_max": 9, "cap_reached": true, "observed_at": "2026-08-31T03:41:00Z" },
-      "contact": { "phone": null, "email": null },
-      "notes": "Relevé POC du 31/08 (substitution du Novotel, délisté à ces dates).",
-      "last_survey_at": "2026-08-31T03:41:00Z"
+      "capacity_hint": {
+        "rooms_displayed_max": 9,
+        "cap_reached": true,
+        "observed_at": "2026-09-15T09:34:18.481Z"
+      },
+      "contact": {
+        "phone": null,
+        "email": null
+      },
+      "notes": "Page confirmée: Hyatt Regency Bangkok Suvarnabhumi Airport. Équipements: Free Wifi (oui), Free 24/7 Airport Shuttle (gratuite), Ample workspace (oui), Restaurant (Sala Thai + The Square 24h). Breakfast: Asian/American/Buffet. Service d'étage non mentionné. Accessibilité PMR non affichée. Prix minimum €129 TTC. Modalités de paiement mixtes (Pay online et No prepayment selon option).",
+      "last_survey_at": "2026-09-15T09:34:18.481Z"
     },
     {
       "id": "canalis-suvarnabhumi-airport",
       "name": "Canalis Suvarnabhumi Airport Hotel",
       "url": "https://www.booking.com/hotel/th/canalis-suvarnabhumi-airport.html",
       "source": "agent",
-      "contracted": false, "preferred": false, "excluded": false,
-      "stars": 4, "review_score": 8.5, "review_count": 4321,
-      "distance_km": 4.8, "distance_ref": "airport",
+      "contracted": false,
+      "preferred": false,
+      "excluded": false,
+      "stars": 4,
+      "review_score": 8.5,
+      "review_count": 4321,
+      "distance_km": 4.8,
+      "distance_ref": "airport",
       "amenities": {
-        "wifi_free": true, "room_service": "non_precise", "workspace": "non_precise",
-        "airport_shuttle": "gratuite", "restaurant_late": false, "accessible": false,
-        "breakfast_available": true, "family_capable": true
+        "wifi_free": true,
+        "room_service": "non_precise",
+        "workspace": "non_precise",
+        "airport_shuttle": "gratuite",
+        "restaurant_late": false,
+        "accessible": false,
+        "breakfast_available": true,
+        "family_capable": true
       },
-      "payment": { "prepayment_online": "non_precise", "pay_at_property_only": null },
+      "payment": {
+        "prepayment_online": "non_precise",
+        "pay_at_property_only": null,
+        "company_payment_possible": "a_confirmer"
+      },
       "indicative_price_from_eur": 142,
-      "capacity_hint": { "rooms_displayed_max": 2, "cap_reached": false, "observed_at": "2026-08-31T03:45:00Z" },
-      "contact": { "phone": null, "email": null },
+      "capacity_hint": {
+        "rooms_displayed_max": 2,
+        "cap_reached": false,
+        "observed_at": "2026-08-31T03:45:00Z"
+      },
+      "contact": {
+        "phone": null,
+        "email": null
+      },
       "notes": "Relevé POC du 31/08 (substitution de l'Amaranth, absent des résultats).",
       "last_survey_at": "2026-08-31T03:45:00Z"
     },
@@ -48,20 +93,287 @@
       "name": "Divalux Resort & Spa Bangkok, Suvarnabhumi Airport-Free Shuttle",
       "url": "https://www.booking.com/hotel/th/divalux-resort-spa.html",
       "source": "agent",
-      "contracted": false, "preferred": false, "excluded": false,
-      "stars": 4, "review_score": 8.4, "review_count": 1876,
-      "distance_km": 4.2, "distance_ref": "airport",
+      "contracted": false,
+      "preferred": false,
+      "excluded": false,
+      "stars": 4,
+      "review_score": 8.4,
+      "review_count": 1876,
+      "distance_km": 4.2,
+      "distance_ref": "airport",
       "amenities": {
-        "wifi_free": true, "room_service": "oui", "workspace": "non_precise",
-        "airport_shuttle": "gratuite", "restaurant_late": true, "accessible": true,
-        "breakfast_available": true, "family_capable": false
+        "wifi_free": true,
+        "room_service": "oui",
+        "workspace": "non_precise",
+        "airport_shuttle": "gratuite",
+        "restaurant_late": true,
+        "accessible": true,
+        "breakfast_available": true,
+        "family_capable": false
       },
-      "payment": { "prepayment_online": "non", "pay_at_property_only": true },
+      "payment": {
+        "prepayment_online": "non",
+        "pay_at_property_only": true,
+        "company_payment_possible": "non"
+      },
       "indicative_price_from_eur": 26,
-      "capacity_hint": { "rooms_displayed_max": 8, "cap_reached": false, "observed_at": "2026-08-31T03:47:00Z" },
-      "contact": { "phone": null, "email": null },
+      "capacity_hint": {
+        "rooms_displayed_max": 8,
+        "cap_reached": false,
+        "observed_at": "2026-08-31T03:47:00Z"
+      },
+      "contact": {
+        "phone": null,
+        "email": null
+      },
       "notes": "Relevé POC du 31/08.",
       "last_survey_at": "2026-08-31T03:47:00Z"
+    },
+    {
+      "id": "lilac-relax-residence",
+      "name": "Lilac Relax-Residence",
+      "url": "https://www.booking.com/hotel/th/lilac-relax-residence.html?checkin=2026-09-29&checkout=2026-09-30&group_adults=2&no_rooms=1&group_children=0&selected_currency=EUR",
+      "source": "agent",
+      "contracted": false,
+      "preferred": false,
+      "excluded": false,
+      "stars": 3,
+      "review_score": 8.7,
+      "review_count": 2002,
+      "distance_km": null,
+      "distance_ref": null,
+      "amenities": {
+        "wifi_free": true,
+        "room_service": "non_precise",
+        "workspace": "non_precise",
+        "airport_shuttle": "payante",
+        "restaurant_late": false,
+        "accessible": false,
+        "breakfast_available": false,
+        "family_capable": true
+      },
+      "payment": {
+        "prepayment_online": "non",
+        "pay_at_property_only": false,
+        "company_payment_possible": "a_confirmer"
+      },
+      "indicative_price_from_eur": 21,
+      "capacity_hint": {
+        "rooms_displayed_max": 3,
+        "cap_reached": false,
+        "observed_at": "2026-09-15T09:30:48.388Z"
+      },
+      "contact": {
+        "phone": null,
+        "email": null
+      },
+      "notes": "Facilities: Free Wifi, Airport shuttle (Additional charge), Garden, 24-hour front desk, Baggage storage, Daily housekeeping, Non-smoking rooms, Snack bar, Air conditioning, Free parking. Family rooms available. No breakfast option visible. Payment: 'Pay nothing until September 24, 2026' (no prepayment required). Rooms: Double €21, Triple with shuttle €47, Junior Suite with shuttle €54. All include taxes and fees, free cancellation.",
+      "last_survey_at": "2026-09-15T09:30:48.388Z"
+    },
+    {
+      "id": "the-cottage-suvarnabhumi",
+      "name": "The Cottage Suvarnabhumi",
+      "url": "https://www.booking.com/hotel/th/the-cottage-suvarnabhumi.html?checkin=2026-09-29&checkout=2026-09-30&group_adults=2&no_rooms=1&group_children=0&selected_currency=EUR",
+      "source": "agent",
+      "contracted": false,
+      "preferred": false,
+      "excluded": false,
+      "stars": 3,
+      "review_score": 8.4,
+      "review_count": 6287,
+      "distance_km": null,
+      "distance_ref": null,
+      "amenities": {
+        "wifi_free": true,
+        "room_service": "oui",
+        "workspace": "oui",
+        "airport_shuttle": "payante",
+        "restaurant_late": true,
+        "accessible": false,
+        "breakfast_available": true,
+        "family_capable": true
+      },
+      "payment": {
+        "prepayment_online": "oui",
+        "pay_at_property_only": false,
+        "company_payment_possible": "oui"
+      },
+      "indicative_price_from_eur": 23,
+      "capacity_hint": {
+        "rooms_displayed_max": 10,
+        "cap_reached": false,
+        "observed_at": "2026-09-15T09:31:15.979Z"
+      },
+      "contact": {
+        "phone": null,
+        "email": null
+      },
+      "notes": "Page verified: 3-star hotel, 8.4/10 (6,287 reviews). Amenities: Free WiFi, room service, workspace (desk), airport shuttle (payante), on-site restaurant (Amigos), no accessibility features listed. Breakfast available (American/Buffet). Family rooms available. Payment: both prepayment and pay-at-property options. Price from €23/night. Room selector shows up to 10 rooms.",
+      "last_survey_at": "2026-09-15T09:31:15.979Z"
+    },
+    {
+      "id": "vismaya-suvarnabhumi-hotel",
+      "name": "Vismaya Suvarnabhumi Hotel",
+      "url": "https://www.booking.com/hotel/th/vismaya-suvarnbhumi-luxury-resort.html",
+      "source": "agent",
+      "contracted": false,
+      "preferred": false,
+      "excluded": false,
+      "stars": 3,
+      "review_score": 8,
+      "review_count": 5377,
+      "distance_km": 0,
+      "distance_ref": null,
+      "amenities": {
+        "wifi_free": true,
+        "room_service": "24h",
+        "workspace": "non_precise",
+        "airport_shuttle": "payante",
+        "restaurant_late": true,
+        "accessible": false,
+        "breakfast_available": true,
+        "family_capable": false
+      },
+      "payment": {
+        "prepayment_online": "non",
+        "pay_at_property_only": true,
+        "company_payment_possible": "non"
+      },
+      "indicative_price_from_eur": 23,
+      "capacity_hint": {
+        "rooms_displayed_max": 5,
+        "cap_reached": false,
+        "observed_at": "2026-09-15T09:31:59.028Z"
+      },
+      "contact": {
+        "phone": null,
+        "email": null
+      },
+      "notes": "Distance not explicitly displayed as numeric value on page (description mentions '19 mi from central Bangkok', Suvarnabhumi Airport 3.1 km). Accessibility: 'Accessible parking' listed but no PMR room accessibility stated. Workspace not mentioned in facilities. Airport shuttle has additional charge (paid). All rooms: 'No prepayment needed - pay at the property'. Breakfast available on select rooms. No family/quadruple rooms visible in selection table.",
+      "last_survey_at": "2026-09-15T09:31:59.028Z"
+    },
+    {
+      "id": "bs-residence-suvarnabhumi",
+      "name": "BS Residence Suvarnabhumi",
+      "url": "https://www.booking.com/hotel/th/bs-residence-suvarnabhumi.html?checkin=2026-09-29&checkout=2026-09-30&group_adults=2&no_rooms=1&group_children=0&selected_currency=EUR",
+      "source": "agent",
+      "contracted": false,
+      "preferred": false,
+      "excluded": false,
+      "stars": 3,
+      "review_score": 7.6,
+      "review_count": 901,
+      "distance_km": null,
+      "distance_ref": null,
+      "amenities": {
+        "wifi_free": true,
+        "room_service": "oui",
+        "workspace": "non_precise",
+        "airport_shuttle": "gratuite",
+        "restaurant_late": false,
+        "accessible": false,
+        "breakfast_available": true,
+        "family_capable": true
+      },
+      "payment": {
+        "prepayment_online": "non",
+        "pay_at_property_only": false,
+        "company_payment_possible": "a_confirmer"
+      },
+      "indicative_price_from_eur": 34,
+      "capacity_hint": {
+        "rooms_displayed_max": 5,
+        "cap_reached": false,
+        "observed_at": "2026-09-15T09:32:38.520Z"
+      },
+      "contact": {
+        "phone": null,
+        "email": null
+      },
+      "notes": "Distance non affichée en km. Restaurant presente mais sert seulement breakfast. Navette aéroport gratuite. Modalités de paiement mixtes selon les offres (certaines pay online, d'autres pay at property).",
+      "last_survey_at": "2026-09-15T09:32:38.520Z"
+    },
+    {
+      "id": "na-siri-lake-view",
+      "name": "Na Siri Lake View",
+      "url": "https://www.booking.com/hotel/th/na-siri-lake-view.html?checkin=2026-09-29&checkout=2026-09-30&group_adults=2&no_rooms=1&group_children=0&selected_currency=EUR",
+      "source": "agent",
+      "contracted": false,
+      "preferred": false,
+      "excluded": false,
+      "stars": 3,
+      "review_score": 7.8,
+      "review_count": 1695,
+      "distance_km": null,
+      "distance_ref": null,
+      "amenities": {
+        "wifi_free": true,
+        "room_service": "non_precise",
+        "workspace": "non_precise",
+        "airport_shuttle": "payante",
+        "restaurant_late": true,
+        "accessible": true,
+        "breakfast_available": true,
+        "family_capable": false
+      },
+      "payment": {
+        "prepayment_online": "non",
+        "pay_at_property_only": true,
+        "company_payment_possible": "non"
+      },
+      "indicative_price_from_eur": 23,
+      "capacity_hint": {
+        "rooms_displayed_max": 6,
+        "cap_reached": false,
+        "observed_at": "2026-09-15T09:34:25.641Z"
+      },
+      "contact": {
+        "phone": null,
+        "email": null
+      },
+      "notes": "Hotel page verified with correct dates (2026-09-29 to 2026-09-30), 2 adults, 1 room, EUR currency. All amenities and pricing extracted from visible page content. No CAPTCHA or blockers encountered.",
+      "last_survey_at": "2026-09-15T09:34:25.641Z"
+    },
+    {
+      "id": "gate43-airport-hotel",
+      "name": "Gate43 Airport Hotel",
+      "url": "https://www.booking.com/hotel/th/gate43-airport.html?checkin=2026-09-29&checkout=2026-09-30&group_adults=2&no_rooms=1&group_children=0&selected_currency=EUR",
+      "source": "agent",
+      "contracted": false,
+      "preferred": false,
+      "excluded": false,
+      "stars": 4,
+      "review_score": 8.1,
+      "review_count": 4420,
+      "distance_km": 0,
+      "distance_ref": null,
+      "amenities": {
+        "wifi_free": true,
+        "room_service": "non_precise",
+        "workspace": "non_precise",
+        "airport_shuttle": "payante",
+        "restaurant_late": true,
+        "accessible": true,
+        "breakfast_available": true,
+        "family_capable": true
+      },
+      "payment": {
+        "prepayment_online": "non",
+        "pay_at_property_only": true,
+        "company_payment_possible": "non"
+      },
+      "indicative_price_from_eur": 41,
+      "capacity_hint": {
+        "rooms_displayed_max": 9,
+        "cap_reached": false,
+        "observed_at": "2026-09-15T09:35:30.036Z"
+      },
+      "contact": {
+        "phone": null,
+        "email": null
+      },
+      "notes": "Page confirmed correct. Free Wifi score 8.9. Shuttle has 'Additional charge'. Business center listed but no explicit workspace/desk. Accessibility features include wheelchair access, tactile signs, Braille, bathroom emergency cord, lowered sink, raised toilet, grab rails. Breakfast: Asian/American options. Family rooms available (Deluxe Family Room). Payment: No prepayment needed, pay at property. Base price €41/night from €91 (55% off). Room selector shows 0-9 options.",
+      "last_survey_at": "2026-09-15T09:35:30.036Z"
     }
   ]
 }

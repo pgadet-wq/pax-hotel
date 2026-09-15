@@ -127,15 +127,19 @@ export const PolicySchema = z.object({
       enabled: true, probe_same_hotel_first: true, batch_size: "auto",
       max_waves: 4, max_sessions_per_run: 18, max_cost_usd_per_run: 10, probe_no_rooms_max: 30,
     }),
-  /** Vitesse et puissance (CDC §16) — « auto » = maximum du plan H, plafonné à 6. */
+  /** Vitesse et puissance (CDC §16) — « auto » = maximum du plan H, plafonné à 6.
+   * Modèles H-9 (mesuré phase 5) : les ids de MODÈLE sont `holo3-122b-a10b` (Holo3
+   * 122B, le plus capable — celui de l'agent h/web-surfer-pro) et `holo3-1-35b-a3b`
+   * (Holo3.1 35B, classe flash) — `h/web-surfer-*` sont des AGENTS, pas des modèles
+   * (une session dont l'agent porte un modèle inconnu échoue à 0 step, erreur interne). */
   agents: z
     .object({
       concurrency: z.union([z.literal("auto"), z.number().int().min(1).max(6)]).default("auto"),
       stagger_ms: z.number().int().min(0).default(10000),
-      model_stage_ab: z.string().default("auto"),
-      model_probe: z.string().default("auto"),
+      model_stage_ab: z.string().default("holo3-122b-a10b"),
+      model_probe: z.string().default("holo3-1-35b-a3b"),
     })
-    .default({ concurrency: "auto", stagger_ms: 10000, model_stage_ab: "auto", model_probe: "auto" }),
+    .default({ concurrency: "auto", stagger_ms: 10000, model_stage_ab: "holo3-122b-a10b", model_probe: "holo3-1-35b-a3b" }),
   inventory: z
     .object({
       max_age_days: z.number().int().min(1).default(30), // H-4 : valeur de départ, éditable

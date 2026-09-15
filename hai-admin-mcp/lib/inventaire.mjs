@@ -155,6 +155,34 @@ export function mergeInventaire(existing, fresh) {
   return normalizeInventaire(merged, "inventaire fusionné");
 }
 
+/**
+ * Aligne les ids d'entrées FRAÎCHES sur l'inventaire existant (URL normalisée
+ * puis nom, insensible à la casse) : un hôtel déjà connu sous un autre slug est
+ * mis à jour au lieu d'être dupliqué (Étage 0 réel, phase 5). Les collisions
+ * internes au lot frais sont écartées (première occurrence gardée).
+ */
+export function reconcileIds(existing, entries, { onDrop = null } = {}) {
+  const cleanUrl = (u) => String(u ?? "").toLowerCase().split("?")[0].replace(/\/+$/, "");
+  const byUrl = new Map();
+  const byName = new Map();
+  for (const h of existing?.hotels ?? []) {
+    if (h.url) byUrl.set(cleanUrl(h.url), h.id);
+    byName.set(h.name.toLowerCase(), h.id);
+  }
+  const out = [];
+  const seen = new Set();
+  for (const e of entries) {
+    const id = (e.url ? byUrl.get(cleanUrl(e.url)) : undefined) ?? byName.get(e.name.toLowerCase()) ?? e.id;
+    if (seen.has(id)) {
+      if (onDrop) onDrop(e, id);
+      continue;
+    }
+    seen.add(id);
+    out.push(id === e.id ? e : { ...e, id });
+  }
+  return out;
+}
+
 /** Slug d'un nom d'hôtel (ids des entrées de repli). */
 export function slugify(name) {
   return String(name)

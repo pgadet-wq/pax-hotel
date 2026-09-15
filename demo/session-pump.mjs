@@ -17,31 +17,43 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out", "expi
  * @param {object} [opts] {timeoutMs, signal}
  * @returns {Promise<{id, status, answer, outcome, error}>} résultat final ; une réponse
  *   absente ou non conforme au schéma est un échec de RÉPONSE (answer null), pas une exception.
+ *
+ * Annulation RÉELLE (phase 5) : l'abandon du signal appelle `handle.cancel()` — la
+ * session s'arrête côté plateforme, `waitForCompletion` rend son statut terminal.
  */
 export async function pumpSession(handle, emit, { timeoutMs = 40 * 60 * 1000, signal } = {}) {
+  const onAbort = () => {
+    Promise.resolve(handle.cancel?.()).catch(() => {});
+  };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    for await (const ev of handle.stream({ until: "settled", timeoutMs })) {
-      if (signal?.aborted) break;
-      for (const e of translateSessionEvent(ev)) emit(e.type, e.data);
+    try {
+      for await (const ev of handle.stream({ until: "settled", timeoutMs })) {
+        if (signal?.aborted) break;
+        for (const e of translateSessionEvent(ev)) emit(e.type, e.data);
+      }
+    } catch (err) {
+      // le flux est un confort d'affichage : une coupure ne condamne pas la session (§6.6)
+      emit("warning", { message: `flux d'événements interrompu (${err?.message ?? err}) — attente du résultat` });
     }
-  } catch (err) {
-    // le flux est un confort d'affichage : une coupure ne condamne pas la session (§6.6)
-    emit("warning", { message: `flux d'événements interrompu (${err?.message ?? err}) — attente du résultat` });
-  }
 
-  try {
-    const result = await handle.waitForCompletion({ timeoutMs });
-    // session encore ouverte après réponse : fermée pour libérer le slot de concurrence
-    if (!TERMINAL.has(result?.status)) {
-      Promise.resolve(handle.cancel?.()).catch(() => {});
+    try {
+      const result = await handle.waitForCompletion({ timeoutMs });
+      // session encore ouverte après réponse : fermée pour libérer le slot de concurrence
+      if (!TERMINAL.has(result?.status)) {
+        Promise.resolve(handle.cancel?.()).catch(() => {});
+      }
+      return result;
+    } catch (err) {
+      // détection par nom : le SDK (AnswerValidationError) ne s'importe pas sous demo/ (INV-7)
+      if (err?.name === "AnswerValidationError") {
+        emit("warning", { message: "réponse finale absente ou non conforme au schéma" });
+        return { id: handle.id, status: "completed", answer: null, outcome: null, error: "réponse non conforme au schéma" };
+      }
+      throw err;
     }
-    return result;
-  } catch (err) {
-    // détection par nom : le SDK (AnswerValidationError) ne s'importe pas sous demo/ (INV-7)
-    if (err?.name === "AnswerValidationError") {
-      emit("warning", { message: "réponse finale absente ou non conforme au schéma" });
-      return { id: handle.id, status: "completed", answer: null, outcome: null, error: "réponse non conforme au schéma" };
-    }
-    throw err;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
 }

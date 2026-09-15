@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ROOT } from "./helpers.mjs";
+import { loadInventaire } from "../lib/inventaire.mjs";
 
 const CLI = path.join(ROOT, "hai-admin-mcp", "tools", "rebooking-v2.mjs");
 const CLI_INV = path.join(ROOT, "hai-admin-mcp", "tools", "inventaire.mjs");
@@ -22,9 +23,12 @@ test("CLI rebooking-v2 : --dry-run BKK — besoins, inventaire, décision décou
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Besoins par tier/);
   assert.match(r.stdout, /J : \d+ dossiers/);
-  assert.match(r.stdout, /Inventaire BKK : 3 hôtel\(s\)/);
+  // le compte affiché suit le fichier livré (inventaire réel : rafraîchi par agents en phase 5)
+  const nbBkk = loadInventaire("BKK").hotels.length;
+  assert.match(r.stdout, new RegExp(`Inventaire BKK : ${nbBkk} hôtel\\(s\\)`));
   assert.match(r.stdout, /Découverte : (SAUTÉE|EXÉCUTÉE) — /);
-  assert.match(r.stdout, /booking\.com\/hotel\/th\/hyatt-regency-bangkok-suvarnabhumi-airport\.html\?checkin=/);
+  // les URLs de relevé portent les dates du séjour (buildHotelUrl), quel que soit le classement Étage B
+  assert.match(r.stdout, /booking\.com\/hotel\/th\/[a-z0-9-]+\.html\?checkin=2026-\d{2}-\d{2}&checkout=/);
   assert.match(r.stdout, /Plan d'extension théorique/);
   assert.match(r.stdout, /18 sessions · 4 vagues · 10 \$/);
   assert.match(r.stdout, /aucun agent, aucun réseau/);

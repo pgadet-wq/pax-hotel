@@ -5,10 +5,12 @@
  * captures par clés d'état internes (jamais une URL cliente, §11),
  * `Cache-Control: private`.
  *
- * Phase 4 : seul le mode simulation (BKK, fixtures, 0 €) et le dry-run sont
- * exécutables. Le run réel et l'Étage 0 par agents répondent 501 (INV-8,
- * câblage en phase 5). INV-7 : ce fichier n'importe que des builtins `node:`
- * et `../hai-admin-mcp/lib/`.
+ * Phase 5 : le run réel (`realCollect`) et l'Étage 0 par agents sont câblés,
+ * DERRIÈRE `DEMO_ALLOW_PAID=1` côté serveur (INV-8) — sans elle, 501 comme en
+ * phase 4. Les captures H (URL plateforme) sont relayées avec bearer par le
+ * proxy, la clé ne quitte jamais le serveur (INV-4). INV-7 : ce fichier
+ * n'importe que des builtins `node:` et `../hai-admin-mcp/lib/` (le SDK reste
+ * confiné à `lib/hai.mjs`).
  */
 import fs from "node:fs";
 import http from "node:http";
@@ -24,9 +26,15 @@ import { buildDossiers, computeNeeds } from "../hai-admin-mcp/lib/dossiers.mjs";
 import { discoveryNeeded } from "../hai-admin-mcp/lib/discovery.mjs";
 import { planExtension } from "../hai-admin-mcp/lib/capacite.mjs";
 import { buildHotelUrl } from "../hai-admin-mcp/lib/hai-urls.mjs";
+import { realCollect } from "../hai-admin-mcp/lib/pipeline.mjs";
 import { createHub } from "./sse-hub.mjs";
 import { createRunManager, HttpError } from "./run-manager.mjs";
 import { createSimulation, loadSimInventaire, simAvailable, SIM_STATIONS } from "./simulate.mjs";
+import { createInventaireRefresher } from "./inventaire-refresh.mjs";
+
+/** Garde INV-8 côté serveur : sessions payantes seulement si le serveur a été
+ * démarré avec DEMO_ALLOW_PAID=1 (accord explicite, phases 5-6 — jamais un défaut). */
+const paidAllowed = () => process.env.DEMO_ALLOW_PAID === "1";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -96,7 +104,17 @@ export function createDemoServer(opts = {}) {
   };
   const hub = opts.hub ?? createHub();
   const manager = createRunManager({ hub, outDir: dirs.outDir });
+  const invRefresher = createInventaireRefresher({ hub, inventaireDir: dirs.inventaireDir });
   let uploadedRows = null; // dernière liste passagers téléversée (mémoire process)
+  let haiClient = null; // client H partagé, créé au premier run réel (journal du point d'entrée EU)
+
+  async function getHaiClient() {
+    if (!haiClient) {
+      const { createClient } = await import("../hai-admin-mcp/lib/hai.mjs");
+      haiClient = createClient();
+    }
+    return haiClient;
+  }
 
   // liste blanche des statiques : fichiers plats de demo/public, relevés au démarrage
   const staticFiles = new Set(
@@ -260,7 +278,7 @@ export function createDemoServer(opts = {}) {
   }
 
   /** POST /api/run — validation zod, 202 {runId} | 409 | 400 ; dry-run 200. */
-  function postRun(body, res) {
+  async function postRun(body, res) {
     let config;
     try {
       config = mergeConfig(body);
@@ -275,8 +293,18 @@ export function createDemoServer(opts = {}) {
     if (body.passengers === "uploaded" && !rows) throw new HttpError(400, "aucune liste passagers téléversée");
 
     if (!scenario.simulate) {
-      // INV-8 : les sessions payantes (run réel, Étage 0) sont câblées en phase 5
-      throw new HttpError(501, "run réel non disponible : câblage des agents en phase 5 (INV-8). Utiliser le mode démonstration (simulate) ou le dry-run.");
+      // INV-8 : sessions payantes seulement derrière DEMO_ALLOW_PAID=1 côté serveur (phases 5-6)
+      if (!paidAllowed()) {
+        throw new HttpError(501, "run réel refusé (INV-8) : sessions d'agents PAYANTES — démarrer le serveur avec DEMO_ALLOW_PAID=1 après accord explicite dans la conversation. Modes gratuits : simulation, dry-run.");
+      }
+      if (invRefresher.isRunning()) throw new HttpError(409, "un rafraîchissement d'inventaire est en cours (INV-10)");
+      const client = await getHaiClient();
+      const { runId } = manager.start({
+        policy, avion, scenario, station, rows,
+        simulate: false,
+        collectFactory: () => realCollect(client),
+      });
+      return sendJson(res, 202, { runId, simulate: false });
     }
     if (!simAvailable(station.code)) {
       return sendJson(res, 400, {
@@ -300,6 +328,12 @@ export function createDemoServer(opts = {}) {
     if (!entry) return sendJson(res, 404, { error: "capture inconnue" }, { "Cache-Control": "private" });
     const headers = { "Content-Type": entry.mediaType || "image/png", "Cache-Control": "private, max-age=3600" };
     const source = String(entry.source ?? "");
+    if (entry.imageType === "base64" && !source.startsWith("data:")) {
+      // ImageContent {type: "base64"} : la source est la charge base64 nue (SDK, phase 5)
+      res.writeHead(200, headers);
+      res.end(Buffer.from(source, "base64"));
+      return;
+    }
     if (source.startsWith("sim-assets/")) {
       const name = path.basename(source); // aplati : aucun chemin client ne touche le disque
       const file = path.join(dirs.simAssetsDir, name);
@@ -317,9 +351,15 @@ export function createDemoServer(opts = {}) {
       return;
     }
     if (/^https:\/\//.test(source)) {
-      // phase 5 : captures H hébergées — relayées côté serveur, jamais exposées au client
+      // Captures H hébergées — relayées côté serveur avec bearer quand l'URL est sur la
+      // plateforme (redirection S3 présignée suivie par fetch) ; la clé ne quitte jamais
+      // le serveur (INV-4), le client ne voit que {hotel_key, seq} (§11).
       try {
-        const upstream = await fetch(source);
+        const { apiOrigin, readApiKey } = await import("../hai-admin-mcp/lib/hai.mjs");
+        // bearer UNIQUEMENT vers l'origine de l'API H (INV-4) ; fetch suit la redirection
+        // S3 présignée en retirant l'Authorization au changement d'origine
+        const onPlatform = new URL(source).origin === new URL(apiOrigin()).origin;
+        const upstream = await fetch(source, onPlatform ? { headers: { Authorization: `Bearer ${readApiKey()}` } } : undefined);
         if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
         res.writeHead(200, { ...headers, "Content-Type": upstream.headers.get("content-type") ?? headers["Content-Type"] });
         res.end(Buffer.from(await upstream.arrayBuffer()));
@@ -387,7 +427,7 @@ export function createDemoServer(opts = {}) {
           return sendJson(res, 200, { stats: { passagers: rows.length, dossiers: new Set(rows.map((r) => r.pnr)).size, parCabine } });
         }
         case "POST /api/run":
-          return postRun(parseJson(await readBody(req)), res);
+          return await postRun(parseJson(await readBody(req)), res);
         case "POST /api/cancel":
           return sendJson(res, 200, manager.cancel());
         case "POST /api/cancel-extension":
@@ -421,7 +461,13 @@ export function createDemoServer(opts = {}) {
       }
       if ((m = /^\/api\/inventaire\/([A-Za-z]{3})\/run$/.exec(p)) && req.method === "POST") {
         if (manager.isRunning()) throw new HttpError(409, "un run est déjà en cours (INV-10)");
-        throw new HttpError(501, "Étage 0 par agents : câblage réel en phase 5 (INV-8). L'ajout manuel et les drapeaux restent disponibles.");
+        if (!paidAllowed()) {
+          throw new HttpError(501, "Étage 0 par agents refusé (INV-8) : sessions PAYANTES — démarrer le serveur avec DEMO_ALLOW_PAID=1 après accord explicite. L'ajout manuel et les drapeaux restent disponibles.");
+        }
+        const body = parseJson(await readBody(req));
+        const station = loadStation(m[1].toUpperCase());
+        const started = invRefresher.start({ client: await getHaiClient(), station, policy: DEFAULT_POLICY, max: body.max });
+        return sendJson(res, 202, started);
       }
       if ((m = /^\/api\/outputs\/([A-Za-z0-9._-]{1,80})$/.exec(p)) && req.method === "GET") {
         return getOutput(m[1], res);
@@ -460,5 +506,8 @@ const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPat
 if (isMain) {
   const app = createDemoServer();
   const addr = await app.listen();
-  console.log(`Démo v2 — http://127.0.0.1:${addr.port} (mode simulation BKK disponible, aucun agent payant en phase 4)`);
+  console.log(
+    `Démo v2 — http://127.0.0.1:${addr.port} (simulation BKK gratuite ; run réel et Étage 0 par agents : ` +
+      `${paidAllowed() ? "AUTORISÉS (DEMO_ALLOW_PAID=1, sessions payantes)" : "verrouillés — INV-8, démarrer avec DEMO_ALLOW_PAID=1 après accord explicite"})`,
+  );
 }

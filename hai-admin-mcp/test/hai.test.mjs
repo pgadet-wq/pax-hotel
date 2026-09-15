@@ -114,3 +114,79 @@ test("prompts : EX-PRO-1 — aucune valeur passager (pnr, nom, prénom, assistan
     }
   }
 });
+
+/* ----------------------------------------------- phase 5 : client réel, H-9 */
+
+test("hai : ensureAgentV2 aligne le modèle d'un agent existant sur la politique (H-9)", async () => {
+  const { ensureAgentV2 } = await import("../lib/hai.mjs");
+  const station = loadStation("BKK");
+  const calls = [];
+  const clientAvec = (model) => ({
+    agents: {
+      getAgent: async () => ({ name: "hotel-scout-bkk-v2", model }),
+      patchAgent: async (req) => calls.push(["patch", req]),
+      createAgent: async (req) => calls.push(["create", req]),
+    },
+  });
+
+  // modèle différent → patch vers agents.model_stage_ab
+  const created = await ensureAgentV2(clientAvec(null), station, DEFAULT_POLICY);
+  assert.equal(created, false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "patch");
+  assert.deepEqual(calls[0][1], { agentName: "hotel-scout-bkk-v2", model: DEFAULT_POLICY.agents.model_stage_ab });
+
+  // modèle déjà aligné → aucun appel
+  calls.length = 0;
+  await ensureAgentV2(clientAvec(DEFAULT_POLICY.agents.model_stage_ab), station, DEFAULT_POLICY);
+  assert.equal(calls.length, 0);
+
+  // « auto » → jamais de patch (modèle plateforme respecté)
+  calls.length = 0;
+  await ensureAgentV2(clientAvec("autre-modele"), station, { ...DEFAULT_POLICY, agents: { ...DEFAULT_POLICY.agents, model_stage_ab: "auto" } });
+  assert.equal(calls.length, 0);
+
+  // absent → création avec le modèle de la politique
+  calls.length = 0;
+  const clientSans = {
+    agents: {
+      getAgent: async () => { throw new Error("404"); },
+      patchAgent: async (req) => calls.push(["patch", req]),
+      createAgent: async (req) => calls.push(["create", req]),
+    },
+  };
+  const wasCreated = await ensureAgentV2(clientSans, station, DEFAULT_POLICY);
+  assert.equal(wasCreated, true);
+  assert.equal(calls[0][0], "create");
+  assert.equal(calls[0][1].model, DEFAULT_POLICY.agents.model_stage_ab);
+});
+
+test("hai : DEFAULT_POLICY porte les modèles du plan H relevés en phase 0 (§16, H-9)", () => {
+  assert.equal(DEFAULT_POLICY.agents.model_stage_ab, "holo3-122b-a10b"); // Holo3 122B (§16)
+  assert.equal(DEFAULT_POLICY.agents.model_probe, "holo3-1-35b-a3b"); // Holo3.1 35B, classe flash
+  assert.equal(DEFAULT_POLICY.agents.concurrency, "auto"); // maximum du plan, plafond 6
+  assert.equal(DEFAULT_POLICY.agents.stagger_ms, 10000);
+});
+
+test("hai : pumpToCompletion annule la session à l'abandon du signal (annulation réelle)", async () => {
+  const { pumpToCompletion } = await import("../lib/hai.mjs");
+  const ac = new AbortController();
+  let cancelled = false;
+  const handle = {
+    id: "sess-x",
+    async *stream() {
+      yield { type: "AgentRunStatusChangeEvent", data: { status: "running" } };
+      ac.abort();
+    },
+    async waitForCompletion() {
+      return { id: "sess-x", status: "cancelled", answer: null };
+    },
+    async cancel() {
+      cancelled = true;
+    },
+  };
+  const result = await pumpToCompletion(handle, () => {}, { signal: ac.signal });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(cancelled, true, "cancel() attendu à l'abandon du signal");
+  assert.equal(result.status, "cancelled");
+});

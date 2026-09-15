@@ -101,3 +101,24 @@ test("signal aborté : le flux s'arrête, le résultat est quand même lu", asyn
   await pumpSession(handle, (t, d) => seen.push(d.status), { signal: ac.signal });
   assert.deepEqual(seen, ["running"]);
 });
+
+test("annulation RÉELLE (phase 5) : l'abandon du signal appelle handle.cancel()", async () => {
+  const ac = new AbortController();
+  const handle = fakeHandle({ result: { status: "cancelled", answer: null } });
+  handle.stream = async function* () {
+    yield { type: "AgentRunStatusChangeEvent", data: { status: "running" } };
+    ac.abort(); // annulation en plein vol : la session doit être arrêtée côté plateforme
+  };
+  await pumpSession(handle, () => {}, { signal: ac.signal });
+  await new Promise((r) => setImmediate(r));
+  assert.ok(handle.cancelled, "cancel() attendu à l'abandon du signal");
+});
+
+test("annulation RÉELLE : signal déjà aborté avant la pompe → cancel immédiat", async () => {
+  const ac = new AbortController();
+  ac.abort();
+  const handle = fakeHandle({ result: { status: "cancelled", answer: null } });
+  await pumpSession(handle, () => {}, { signal: ac.signal });
+  await new Promise((r) => setImmediate(r));
+  assert.ok(handle.cancelled);
+});

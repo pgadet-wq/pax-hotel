@@ -24,15 +24,20 @@ const entry = (id, over = {}) => ({
 });
 const inv = (hotels, over = {}) => ({ station: "BKK", updated_at: "2026-09-14T09:30:00Z", reference: { checkin: "2026-09-28", nights: 1 }, hotels, ...over });
 
-test("inventaire : les 3 fichiers livrés sont valides — BKK 3 hôtels du POC, CDG/NOU vides", () => {
+test("inventaire : les 3 fichiers livrés sont valides — BKK réel (≥ 8 hôtels agents, phase 5), CDG/NOU vides", () => {
   const bkk = loadInventaire("BKK");
-  assert.equal(bkk.hotels.length, 3);
-  assert.deepEqual(bkk.hotels.map((h) => h.id).sort(), ["canalis-suvarnabhumi-airport", "divalux-resort-spa-bkk", "hyatt-regency-bkk-airport"]);
-  // EX-INV-4 recalculé au chargement : les 3 modes de règlement sont couverts
-  assert.deepEqual(
-    Object.fromEntries(bkk.hotels.map((h) => [h.id, h.payment.company_payment_possible])),
-    { "hyatt-regency-bkk-airport": "oui", "canalis-suvarnabhumi-airport": "a_confirmer", "divalux-resort-spa-bkk": "non" },
-  );
+  // critère phase 5 : ≥ 8 hôtels source agent, payment et capacity_hint partout
+  assert.ok(bkk.hotels.length >= 8, `BKK : ${bkk.hotels.length} hôtel(s) < 8`);
+  assert.ok(bkk.hotels.every((h) => h.source === "agent"));
+  assert.ok(bkk.hotels.every((h) => h.capacity_hint?.observed_at));
+  // le refresh réel a réconcilié sans perdre les 3 entrées du POC (merge EX-INV-1)
+  for (const id of ["canalis-suvarnabhumi-airport", "divalux-resort-spa-bkk", "hyatt-regency-bkk-airport"]) {
+    assert.ok(bkk.hotels.some((h) => h.id === id), `entrée POC absente : ${id}`);
+  }
+  // EX-INV-4 recalculé au chargement : valeurs valides et les 3 modes de règlement couverts
+  const modes = new Set(bkk.hotels.map((h) => h.payment.company_payment_possible));
+  assert.ok([...modes].every((m) => ["oui", "non", "a_confirmer"].includes(m)));
+  assert.deepEqual([...modes].sort(), ["a_confirmer", "non", "oui"]);
   for (const code of ["CDG", "NOU"]) {
     const vide = loadInventaire(code);
     assert.equal(vide.hotels.length, 0);
@@ -181,4 +186,30 @@ test("CLI inventaire : --offline fusionne les fixtures sans toucher l'entrée ma
   } finally {
     fs.writeFileSync(file, original, "utf8"); // l'inventaire committé reste l'état initial
   }
+});
+
+test("inventaire : reconcileIds — même hôtel sous un autre slug mis à jour, pas dupliqué (phase 5)", async () => {
+  const { reconcileIds } = await import("../lib/inventaire.mjs");
+  const existing = {
+    hotels: [
+      { id: "hyatt-regency-bkk-airport", name: "Hyatt Regency Bangkok Suvarnabhumi Airport", url: "https://www.booking.com/hotel/th/hyatt-regency-bangkok-suvarnabhumi-airport.html" },
+      { id: "manuel-x", name: "Hôtel Manuel", url: "" },
+    ],
+  };
+  const fresh = [
+    // redécouvert : slug différent mais même URL (avec paramètres) → id existant repris
+    { id: "hyatt-regency-bangkok-suvarnabhumi-airport", name: "Hyatt Regency Bangkok Suvarnabhumi Airport", url: "https://www.booking.com/hotel/th/hyatt-regency-bangkok-suvarnabhumi-airport.html?checkin=2026-09-29" },
+    // même nom, pas d'URL → rapproché par nom
+    { id: "hotel-manuel", name: "hôtel manuel".toUpperCase(), url: "" },
+    // nouveau : intouché
+    { id: "novotel-bangkok", name: "Novotel Bangkok", url: "https://www.booking.com/hotel/th/novotel-bangkok.html" },
+    // collision interne (même hôtel deux fois dans le lot) : écarté
+    { id: "hyatt-bis", name: "Hyatt Regency Bangkok Suvarnabhumi Airport", url: "" },
+  ];
+  const dropped = [];
+  const out = reconcileIds(existing, fresh, { onDrop: (e, id) => dropped.push([e.id, id]) });
+  assert.deepEqual(out.map((e) => e.id), ["hyatt-regency-bkk-airport", "manuel-x", "novotel-bangkok"]);
+  assert.deepEqual(dropped, [["hyatt-bis", "hyatt-regency-bkk-airport"]]);
+  // les entrées d'origine ne sont pas mutées
+  assert.equal(fresh[0].id, "hyatt-regency-bangkok-suvarnabhumi-airport");
 });

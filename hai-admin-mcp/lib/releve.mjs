@@ -23,7 +23,15 @@ const isQueueError = (err) => /429|rate.?limit|file d'attente|queue/i.test(Strin
 export async function runReleve({ client, policy, station, candidate, tiers = [], checkin, checkout, groupId, emit, signal, attempt = 1 }) {
   const hotelKey = candidate.id ?? slugify(candidate.name);
   const url = candidate.url ? buildHotelUrl(candidate.url, { checkin, checkout }) : null;
-  const scoped = (type, data, extra = {}) => emit(type, data, { hotel_key: hotelKey, ...extra });
+  // métriques de la session (coût réel, steps) : dernières valeurs vues sur le flux
+  const usage = { steps: 0, costUsd: 0 };
+  const scoped = (type, data, extra = {}) => {
+    if (type === "metrics") {
+      usage.steps = data.steps ?? usage.steps;
+      usage.costUsd = data.cost_usd ?? usage.costUsd;
+    }
+    return emit(type, data, { hotel_key: hotelKey, ...extra });
+  };
   scoped("agent_status", { status: "starting", name: candidate.name, tiers, attempt });
 
   let handle;
@@ -69,6 +77,7 @@ export async function runReleve({ client, policy, station, candidate, tiers = []
   if (typeof answer === "string") {
     try { answer = JSON.parse(answer); } catch { answer = null; }
   }
+  const flat = answer; // réponse plate (schéma releveSchema) — archivée par les probes de la phase 5
   answer = toReleveAnswer(answer, { url: candidate.url ?? "", checkin, checkout, candidate });
 
   const failedHard = result.status === "failed" && !answer;
@@ -94,6 +103,9 @@ export async function runReleve({ client, policy, station, candidate, tiers = []
     outcome: result.outcome ?? null,
     error: result.error ?? null,
     answer,
+    flat,
+    steps: usage.steps,
+    costUsd: usage.costUsd,
   };
 }
 

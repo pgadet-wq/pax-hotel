@@ -137,14 +137,22 @@ test("SSE /api/events : snapshot à la connexion", async (t) => {
   ac.abort();
 });
 
-test("INV-8 : run réel et Étage 0 par agents répondent 501 en phase 4", async (t) => {
+test("INV-8 : sans DEMO_ALLOW_PAID=1, run réel et Étage 0 par agents répondent 501 (phase 5)", async (t) => {
+  const avant = process.env.DEMO_ALLOW_PAID;
+  delete process.env.DEMO_ALLOW_PAID;
+  t.after(() => {
+    if (avant === undefined) delete process.env.DEMO_ALLOW_PAID;
+    else process.env.DEMO_ALLOW_PAID = avant;
+  });
   const { call } = await boot(t);
   const real = await call("POST", "/api/run", { scenario: { station: "BKK", simulate: false } });
   assert.equal(real.status, 501);
   assert.match(real.data.error, /INV-8/);
+  assert.match(real.data.error, /DEMO_ALLOW_PAID/);
   const inv = await call("POST", "/api/inventaire/BKK/run", {});
   assert.equal(inv.status, 501);
-  assert.match(inv.data.error, /phase 5/);
+  assert.match(inv.data.error, /INV-8/);
+  assert.match(inv.data.error, /DEMO_ALLOW_PAID/);
 });
 
 test("EX-UI-1 : simulation hors BKK refusée avec proposition de dry-run", async (t) => {

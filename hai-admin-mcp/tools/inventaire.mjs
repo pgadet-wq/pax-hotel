@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadStation } from "../lib/stations.mjs";
-import { loadInventaire, mergeInventaire, normalizeInventaire, isStale, slugify, INVENTAIRE_DIR } from "../lib/inventaire.mjs";
+import { loadInventaire, mergeInventaire, normalizeInventaire, isStale, slugify, reconcileIds, INVENTAIRE_DIR } from "../lib/inventaire.mjs";
 import { buildNflt, buildSearchUrl, buildHotelUrl } from "../lib/hai-urls.mjs";
 import { DEFAULT_POLICY } from "../lib/policy.mjs";
 import { newRunId } from "../lib/scenario.mjs";
@@ -119,17 +119,37 @@ if (!wantsRefresh) {
 const MAX = Number(opt("max", "10"));
 if (!Number.isInteger(MAX) || MAX < 1 || MAX > 15) throw new Error(`--max doit être un entier de 1 à 15 (reçu : ${opt("max", "10")})`);
 
-const { createClient, ensureAgentV2, agentNameV2, inventaireHotelSchema, promptInventaireHotel, toInventaireEntry, pumpToCompletion } = await import("../lib/hai.mjs");
+const { createClient, apiOrigin, readApiKey, ensureAgentV2, agentNameV2, inventaireHotelSchema, promptInventaireHotel, toInventaireEntry, pumpToCompletion } =
+  await import("../lib/hai.mjs");
 const { runDiscovery } = await import("../lib/discovery.mjs");
+const { discoverySchema } = await import("../lib/hai.mjs");
 
+const OUT_DIR = path.join(ROOT, "out");
 const runId = newRunId();
 const groupId = `inv-${station.code.toLowerCase()}-${runId}`; // EX-INV-7
+const t0 = Date.now();
+const captures = []; // {hotel_key, seq, source, imageType, mediaType}
+const metricsByKey = new Map(); // hotel_key → dernier {steps, cost_usd, tokens}
+let queue429 = 0;
+let inFlight = 0;
+let maxInFlight = 0; // concurrence réellement obtenue (mesure §13)
+
 const emit = mkEmitter({ run_id: runId }, (ev) => {
   const d = ev.data;
-  if (ev.type === "warning") console.log(`[warn ] ${d.message}`);
+  const key = ev.hotel_key ?? "?";
+  if (ev.type === "warning") {
+    console.log(`[warn ] ${d.message}`);
+    if (/429|rate.?limit|file d'attente|queue/i.test(d.message)) queue429 += 1;
+  } else if (ev.type === "error") console.log(`[erreur] ${key} : ${d.message}`);
   else if (ev.type === "phase") console.log(`[phase] ${d.phase}${d.done ? ` terminé (${d.count ?? ""})` : ""}`);
-  else if (ev.type === "agent_status" && d.status) console.log(`[agent] ${ev.hotel_key ?? "?"} : ${d.status}`);
+  else if (ev.type === "agent_status" && d.status) console.log(`[agent] ${key} : ${d.status}${d.live_view_url ? ` — vue live : ${d.live_view_url}` : ""}`);
+  else if (ev.type === "agent_thought") console.log(`[pensée] ${key} : ${d.text}`);
   else if (ev.type === "candidate") console.log(`[cand ] ${d.name} (${d.stars ?? "?"}★, ${d.review_score ?? "?"}/10)`);
+  else if (ev.type === "metrics" && ev.hotel_key) metricsByKey.set(key, d);
+  else if (ev.type === "screenshot") {
+    const seq = captures.filter((c) => c.hotel_key === key).length;
+    captures.push({ hotel_key: key, seq, source: d.source, imageType: d.imageType ?? null, mediaType: d.mediaType ?? "image/png" });
+  }
 });
 
 console.log(`Étage 0 — inventaire ${station.code} par agents (groupe ${groupId}, max ${MAX} hôtels, référence ${CHECKIN} → ${CHECKOUT})`);
@@ -137,7 +157,19 @@ const client = createClient();
 
 /* 1. découverte (logique Étage A : 1 session, 2 passes) */
 const disc = await runDiscovery({ client, policy, station, checkin: CHECKIN, checkout: CHECKOUT, groupId, emit });
+const discSchemaOk = disc.flat ? discoverySchema.safeParse(disc.flat).success : false;
 const candidats = disc.candidates.slice(0, MAX);
+fs.mkdirSync(OUT_DIR, { recursive: true });
+fs.writeFileSync(
+  path.join(OUT_DIR, `candidats-${runId}.json`),
+  JSON.stringify({
+    runId, kind: "inventaire-discovery", station: station.code, checkin: CHECKIN, checkout: CHECKOUT, groupId,
+    sessionId: disc.sessionId, status: disc.status, outcome: disc.outcome, currency: disc.currency,
+    notes: disc.notes, schema_valid: discSchemaOk, answer: disc.flat, candidates: disc.candidates,
+  }, null, 2) + "\n",
+  "utf8",
+);
+console.log(`écrit out/candidats-${runId}.json (${disc.candidates.length} candidats, devise ${disc.currency}, schéma ${discSchemaOk ? "valide" : "NON valide"})`);
 if (!candidats.length) {
   console.error("découverte sans candidat : inventaire inchangé (replis de la fiche escale disponibles au run).");
   process.exit(1);
@@ -147,6 +179,7 @@ if (!candidats.length) {
 await ensureAgentV2(client, station, policy);
 const queue = [...candidats];
 const entries = [];
+const sessions = []; // bilan par session (mesures §13)
 let started = 0;
 async function worker() {
   for (;;) {
@@ -167,30 +200,99 @@ async function worker() {
         answerSchema: inventaireHotelSchema,
         ...(url ? { overrides: { "agent.environments[kind=web].start_url": url } } : {}),
       });
-      const result = await pumpToCompletion(handle, (type, data) => emit(type, data, { hotel_key: hotelKey, session_id: handle.id }));
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      let result;
+      try {
+        result = await pumpToCompletion(handle, (type, data) => emit(type, data, { hotel_key: hotelKey, session_id: handle.id }));
+      } finally {
+        inFlight -= 1;
+      }
       let flat = result.answer;
       if (typeof flat === "string") {
         try { flat = JSON.parse(flat); } catch { flat = null; }
       }
+      const m = metricsByKey.get(hotelKey) ?? {};
+      sessions.push({ hotel: hotelKey, name: cand.name, sessionId: handle.id, status: result.status, outcome: result.outcome ?? null, found: flat?.found ?? false, steps: m.steps ?? 0, cost_usd: m.cost_usd ?? 0, schema_valid: inventaireHotelSchema.safeParse(flat).success, answer: flat });
       const entry = toInventaireEntry(flat, { id: hotelKey });
       if (entry) entries.push(entry);
       else emit("warning", { message: `« ${cand.name} » : relevé d'inventaire sans résultat (${result.error ?? flat?.notes ?? "found=false"})` });
     } catch (err) {
       emit("warning", { message: `« ${cand.name} » : session d'inventaire en échec (${err?.message ?? err})` });
+      sessions.push({ hotel: hotelKey, name: cand.name, sessionId: null, status: "error", outcome: null, found: false, steps: 0, cost_usd: 0, schema_valid: false, answer: null, error: String(err?.message ?? err) });
     }
   }
 }
 await Promise.all(Array.from({ length: 3 }, () => worker()));
 
-/* 3. fusion et écriture (EX-INV-6) */
+/* 3. fusion et écriture (EX-INV-6) — ids réconciliés avec l'existant (pas de doublon d'hôtel) */
+const reconciled = reconcileIds(existing, entries, {
+  onDrop: (e, id) => emit("warning", { message: `« ${e.name} » écarté : hôtel déjà relevé dans ce lot (${id})` }),
+});
 const fresh = normalizeInventaire({
   station: station.code,
   updated_at: new Date().toISOString(),
   reference: { checkin: CHECKIN, nights: NIGHTS },
-  hotels: entries,
+  hotels: reconciled,
 }, "inventaire Étage 0");
 const merged = mergeInventaire(existing, fresh);
 const dest = path.join(INVENTAIRE_DIR, `${station.code}.json`);
 fs.mkdirSync(INVENTAIRE_DIR, { recursive: true });
 fs.writeFileSync(dest, JSON.stringify(merged, null, 2) + "\n", "utf8");
-console.log(`Écrit ${dest} — ${merged.hotels.length} hôtel(s), ${entries.length} relevé(s) frais (groupe ${groupId}).`);
+console.log(`Écrit ${dest} — ${merged.hotels.length} hôtel(s), ${reconciled.length} relevé(s) frais (groupe ${groupId}).`);
+
+/* 4. mesures (§13, H-9) + archives + captures */
+const duration_s = Math.round((Date.now() - t0) / 1000);
+let cost_usd = 0, steps = 0;
+for (const m of metricsByKey.values()) {
+  cost_usd += m.cost_usd ?? 0;
+  steps += m.steps ?? 0;
+}
+cost_usd = Math.round(cost_usd * 10000) / 10000;
+const mesures = {
+  duration_s, sessions: metricsByKey.size, steps, cost_usd, queue_or_429: queue429,
+  concurrency_config: 3, stagger_ms: 25000, max_in_flight_observed: maxInFlight,
+  discovery: { sessionId: disc.sessionId, status: disc.status, steps: disc.steps ?? 0, cost_usd: disc.costUsd ?? 0 },
+};
+fs.writeFileSync(
+  path.join(OUT_DIR, `inventaire-${runId}.json`),
+  JSON.stringify({ runId, kind: "inventaire-releves", station: station.code, checkin: CHECKIN, checkout: CHECKOUT, groupId, entries: reconciled, sessions, mesures }, null, 2) + "\n",
+  "utf8",
+);
+console.log(`écrit out/inventaire-${runId}.json (${reconciled.length} entrées, ${sessions.length} sessions)`);
+
+if (captures.length) {
+  const dir = path.join(OUT_DIR, `captures-${runId}`);
+  fs.mkdirSync(dir, { recursive: true });
+  const origin = new URL(apiOrigin()).origin;
+  let saved = 0;
+  for (const c of captures) {
+    try {
+      const src = String(c.source ?? "");
+      let buf = null;
+      let ext = String(c.mediaType ?? "").includes("jpeg") ? ".jpg" : ".png";
+      if (c.imageType === "base64" && !src.startsWith("data:")) buf = Buffer.from(src, "base64");
+      else if (src.startsWith("data:")) {
+        const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(src);
+        if (!m) continue;
+        buf = m[2] ? Buffer.from(m[3], "base64") : Buffer.from(decodeURIComponent(m[3]), "utf8");
+      } else if (/^https:\/\//.test(src)) {
+        const r = await fetch(src, new URL(src).origin === origin ? { headers: { Authorization: `Bearer ${readApiKey()}` } } : undefined);
+        if (!r.ok) continue;
+        buf = Buffer.from(await r.arrayBuffer());
+        if ((r.headers.get("content-type") ?? "").includes("jpeg")) ext = ".jpg";
+      } else continue;
+      fs.writeFileSync(path.join(dir, `${c.hotel_key.replace(/[^a-z0-9_-]/gi, "_")}-${String(c.seq).padStart(2, "0")}${ext}`), buf);
+      saved += 1;
+    } catch {
+      /* capture manquée : sans gravité */
+    }
+  }
+  console.log(`captures enregistrées : ${saved}/${captures.length} → out/captures-${runId}/`);
+}
+
+console.log(
+  `\nBilan Étage 0 — durée ${duration_s} s · découverte ${Math.round((disc.costUsd ?? 0) * 10000) / 10000} $ + ` +
+    `${metricsByKey.size - (metricsByKey.has("_discovery") ? 1 : 0)} relevés · total ${cost_usd} $ · ` +
+    `concurrence observée ${maxInFlight}/3 · files/429 : ${queue429}`,
+);

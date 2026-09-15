@@ -95,7 +95,14 @@ export async function runDiscovery({ client, policy, station, checkin, checkout,
     emit("warning", { message: `découverte abandonnée (${err?.message ?? err}) — repli sur l'inventaire et les hôtels de secours` });
     return { candidates: [], sessionId: null, status: "error", outcome: null, notes: String(err?.message ?? err) };
   }
-  const scoped = (type, data) => emit(type, data, { session_id: handle.id, hotel_key: "_discovery" });
+  const usage = { steps: 0, costUsd: 0 };
+  const scoped = (type, data) => {
+    if (type === "metrics") {
+      usage.steps = data.steps ?? usage.steps;
+      usage.costUsd = data.cost_usd ?? usage.costUsd;
+    }
+    return emit(type, data, { session_id: handle.id, hotel_key: "_discovery" });
+  };
   scoped("agent_status", { status: "running" });
 
   const result = await pumpToCompletion(handle, scoped, { signal });
@@ -118,5 +125,8 @@ export async function runDiscovery({ client, policy, station, checkin, checkout,
     status: result.status,
     outcome: result.outcome ?? null,
     notes: answer?.notes ?? "",
+    flat: answer, // réponse plate (discoverySchema) — archivée par --probe-discovery (phase 5)
+    steps: usage.steps,
+    costUsd: usage.costUsd,
   };
 }

@@ -27,15 +27,23 @@ export function readApiKey() {
   return m[1];
 }
 
+/** Origine de l'API H effectivement utilisée (H-6) — sert aussi au proxy de captures. */
+export function apiOrigin() {
+  return process.env.HAI_API_BASE_URL ?? HaiAgentsEnvironment.Eu;
+}
+
 /**
  * Client H sur le point d'entrée EUROPÉEN (H-6, relevé phase 0) : le SDK ne lit
  * pas `HAI_API_BASE_URL` tout seul — on la câble ici (origine SANS `/api/v2`).
+ * Le point d'entrée effectif est journalisé au démarrage (vérification phase 5).
  */
 export function createClient() {
-  return new HaiAgentsClient({
-    apiKey: readApiKey(),
-    environment: process.env.HAI_API_BASE_URL ?? HaiAgentsEnvironment.Eu,
-  });
+  const environment = apiOrigin();
+  console.error(
+    `[hai] client H — point d'entrée ${environment}` +
+      `${process.env.HAI_API_BASE_URL ? " (HAI_API_BASE_URL)" : " (défaut européen HaiAgentsEnvironment.Eu)"}`,
+  );
+  return new HaiAgentsClient({ apiKey: readApiKey(), environment });
 }
 
 /* ------------------------------------------------------------------ agent */
@@ -43,16 +51,28 @@ export function createClient() {
 /** Nom de l'agent v2 d'une escale — la v1 « hotel-scout-bkk » reste intacte (INV-6). */
 export const agentNameV2 = (station) => `hotel-scout-${station.code.toLowerCase()}-v2`;
 
-/** Crée l'agent v2 de l'escale s'il n'existe pas (idempotent). Retourne true s'il a été créé. */
+/**
+ * Crée l'agent v2 de l'escale s'il n'existe pas (idempotent). Retourne true s'il a été créé.
+ * Phase 5 (H-9) : si l'agent existe avec un autre modèle que `agents.model_stage_ab`,
+ * il est aligné par patch — la politique reste la source de vérité du modèle.
+ */
 export async function ensureAgentV2(client, station, policy) {
   const name = agentNameV2(station);
+  const wanted = policy?.agents?.model_stage_ab && policy.agents.model_stage_ab !== "auto" ? policy.agents.model_stage_ab : undefined;
+  let existing = null;
   try {
-    await client.agents.getAgent({ agentName: name });
-    return false;
+    existing = await client.agents.getAgent({ agentName: name });
   } catch {
     /* absent : création */
   }
-  const model = policy?.agents?.model_stage_ab && policy.agents.model_stage_ab !== "auto" ? policy.agents.model_stage_ab : undefined;
+  if (existing) {
+    if (wanted && existing.model !== wanted) {
+      await client.agents.patchAgent({ agentName: name, model: wanted });
+      console.error(`[hai] agent ${name} : modèle ${existing.model ?? "(défaut plateforme)"} → ${wanted} (H-9)`);
+    }
+    return false;
+  }
+  const model = wanted;
   await client.agents.createAgent({
     name,
     description:
@@ -380,28 +400,41 @@ export function promptInventaireHotel({ hotelName, hasStartUrl, checkin, checkou
  * retourne le résultat final. Flux et attente sont séquentiels (même curseur API).
  * Une réponse absente ou non conforme au schéma est un échec de RÉPONSE, pas une
  * exception fatale — l'appelant décide du retry.
+ *
+ * Annulation RÉELLE (phase 5) : l'abandon du signal appelle `handle.cancel()` —
+ * la session s'arrête côté plateforme (facturation comprise), `waitForCompletion`
+ * rend alors son statut terminal.
  */
 export async function pumpToCompletion(handle, emit, { timeoutMs = 40 * 60 * 1000, signal } = {}) {
+  const onAbort = () => {
+    Promise.resolve(handle.cancel()).catch(() => {});
+  };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    for await (const ev of handle.stream({ until: "settled", timeoutMs })) {
-      if (signal?.aborted) break;
-      for (const e of translateSessionEvent(ev)) emit(e.type, e.data);
+    try {
+      for await (const ev of handle.stream({ until: "settled", timeoutMs })) {
+        if (signal?.aborted) break;
+        for (const e of translateSessionEvent(ev)) emit(e.type, e.data);
+      }
+    } catch (err) {
+      // le flux est un confort d'affichage : une coupure ne condamne pas la session
+      emit("warning", { message: `flux d'événements interrompu (${err?.message ?? err}) — attente du résultat` });
     }
-  } catch (err) {
-    // le flux est un confort d'affichage : une coupure ne condamne pas la session
-    emit("warning", { message: `flux d'événements interrompu (${err?.message ?? err}) — attente du résultat` });
-  }
-  try {
-    const result = await handle.waitForCompletion({ timeoutMs });
-    // la session peut rester idle après sa réponse (timeout d'inactivité par défaut) :
-    // on la ferme pour libérer le slot de concurrence, sans conséquence sur le résultat
-    if (!isTerminalSessionStatus(result.status)) handle.cancel().catch(() => {});
-    return result;
-  } catch (err) {
-    if (err instanceof AnswerValidationError) {
-      emit("warning", { message: "réponse finale absente ou non conforme au schéma" });
-      return { id: handle.id, status: "completed", answer: null, outcome: null, error: "réponse non conforme au schéma", events: [] };
+    try {
+      const result = await handle.waitForCompletion({ timeoutMs });
+      // la session peut rester idle après sa réponse (timeout d'inactivité par défaut) :
+      // on la ferme pour libérer le slot de concurrence, sans conséquence sur le résultat
+      if (!isTerminalSessionStatus(result.status)) handle.cancel().catch(() => {});
+      return result;
+    } catch (err) {
+      if (err instanceof AnswerValidationError) {
+        emit("warning", { message: "réponse finale absente ou non conforme au schéma" });
+        return { id: handle.id, status: "completed", answer: null, outcome: null, error: "réponse non conforme au schéma", events: [] };
+      }
+      throw err;
     }
-    throw err;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
 }

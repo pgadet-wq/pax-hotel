@@ -196,5 +196,6 @@ test("pipeline : rejeu complet sur les fixtures livrées — phases §5.8 ordonn
   assert.ok(!res.outputs.messagesCsv.includes("{{"));
   assert.deepEqual(res.cost.not_determinable, ["repas", "transport"]);
   const status = events.find((e) => e.type === "inventory_status");
-  assert.deepEqual(status.data, { station: "BKK", updated_at: "2026-08-31T04:00:00Z", hotels_count: 3, stale: false, used: true });
+  // l'état d'inventaire suit le fichier livré (rafraîchi par agents en phase 5)
+  assert.deepEqual(status.data, { station: "BKK", updated_at: inv.updated_at, hotels_count: inv.hotels.length, stale: false, used: true });
 });
