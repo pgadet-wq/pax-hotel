@@ -136,7 +136,7 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
 
     const take = (offer, count, note = null) => {
       offer.left -= count;
-      return { rooms: [{ type: offer.room_type, count, price: offer.price, assumed: offer.assumed, capReached: offer.capReached }], hotel: h, conf: c, note };
+      return { rooms: [{ type: offer.room_type, count, price: offer.price, assumed: offer.assumed, capReached: offer.capReached, occupancy_adults: offer.occupancy_adults, occupancy_children: offer.occupancy_children }], hotel: h, conf: c, note };
     };
 
     if (dossier.familyUnit) {
@@ -162,6 +162,18 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
     let placed = null;
     let tierUsed = d.cabin;
     let paymentBlocked = false;
+    let accessBlocked = false;
+
+    // Dossiers HORS PLAN HÔTEL : traitement nominatif au desk (civière, médical, mineur
+    // non accompagné) ou pas de droit d'entrée sur le territoire de l'escale (fiche escale
+    // `constraints.entry_visa_check` — CDC §5.2 « traitement nominatif GHA »). Ils ne
+    // consomment aucun stock et ne nourrissent PAS l'extension : relever plus d'hôtels ne
+    // les logera pas.
+    // Seul un droit d'entrée REFUSÉ sort du plan. « INCONNU » = à vérifier au comptoir :
+    // le dossier reste dans le plan et sa capacité reste provisionnée — sinon l'extension
+    // ne chercherait aucune chambre pour lui et l'immigration pourrait l'admettre sans lit.
+    const horsPlan = d.escaladeNominative ?? (d.droitEntree === "NON" ? "droit d'entrée" : null);
+    const droitAVerifier = d.droitEntree === "INCONNU";
 
     // Parcours du tier du dossier ; pour un PMR sans solution accessible, on préfère un
     // SURCLASSEMENT de tier (jugé contre la politique du tier supérieur) à une dérogation
@@ -169,7 +181,11 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
     const tryTier = (tier, { allowOverCap }) => {
       for (const entry of rankedFor(tier, { pmrBoost: isPmr })) {
         if (!allowOverCap && entry.c.level === "HORS_BAREME") continue;
-        if (isPmr && pmrCfg.require_accessible && !entry.h.accessible) continue;
+        if (isPmr && pmrCfg.require_accessible && !entry.h.accessible) {
+          // l'hôtel aurait pu loger le dossier : c'est l'accessibilité qui bloque, pas la capacité
+          if (couldFit(entry.h, d, tier, entry.c.level === "HORS_BAREME")) accessBlocked = true;
+          continue;
+        }
         if (entry.h.reglement.escalade) {
           // paiement impossible et carte désactivée : hôtel écarté (EX-ALL-6)
           if (couldFit(entry.h, d, tier, entry.c.level === "HORS_BAREME")) paymentBlocked = true;
@@ -183,30 +199,54 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
       }
       return null;
     };
-    placed = tryTier(d.cabin, { allowOverCap: !isPmr });
-    if (!placed && isPmr && pmrCfg.allow_tier_upgrade) {
-      for (let tier = TIER_UP[d.cabin]; tier && !placed; tier = TIER_UP[tier]) {
-        placed = tryTier(tier, { allowOverCap: false });
+    if (!horsPlan) {
+      placed = tryTier(d.cabin, { allowOverCap: !isPmr });
+      if (!placed && isPmr && pmrCfg.allow_tier_upgrade) {
+        for (let tier = TIER_UP[d.cabin]; tier && !placed; tier = TIER_UP[tier]) {
+          placed = tryTier(tier, { allowOverCap: false });
+        }
       }
+      if (!placed && isPmr) placed = tryTier(d.cabin, { allowOverCap: true });
     }
-    if (!placed && isPmr) placed = tryTier(d.cabin, { allowOverCap: true });
 
     const notes = [];
+    if (horsPlan === "droit d'entrée") {
+      notes.push("droit d'entrée refusé : hébergement en ville impossible, traitement nominatif GHA (zone de transit)");
+    } else if (horsPlan) {
+      notes.push(`${horsPlan} : prise en charge nominative par le desk, hors plan hôtel`);
+    }
+    if (droitAVerifier) notes.push("SOUS RÉSERVE : droit d'entrée à vérifier au comptoir — chambre provisionnée, à annuler si l'entrée est refusée");
     if (isPmr) notes.push("PMR : chambre accessible + transfert adapté à confirmer par l'hôtel");
+    for (const n of d.ssrNotes ?? []) notes.push(n);
+    if (d.overlays.animal) notes.push("animal en cabine/soute : hôtel acceptant les animaux à confirmer (critère non relevé)");
+    if (d.overlays.groupe) notes.push(`groupe ${d.groupe} : chambrage de l'organisateur${d.roomsSource === "liste" ? "" : " NON fourni — appariement deviné"}`);
     if (placed?.note) notes.push(placed.note);
     if (d.infants) notes.push("berceau à demander");
     if (placed && tierUsed !== d.cabin) notes.push(`surclassement de tier ${d.cabin} → ${tierUsed} (accessibilité)`);
+    if (placed) {
+      const couchages = placed.rooms.reduce((s2, r) => s2 + r.count * ((r.occupancy_adults ?? 2) + (r.occupancy_children ?? 0)), 0);
+      const personnes = d.adults + d.children; // les nourrissons ne consomment pas de capacité
+      if (couchages && couchages < personnes) {
+        notes.push(`COUCHAGES : ${couchages} place(s) déclarée(s) pour ${personnes} personnes — lit d'appoint ou chambre supplémentaire à confirmer avec l'hôtel`);
+      }
+    }
     if (placed?.rooms.some((r) => r.assumed)) notes.push("quantité non affichée par le site — stock supposé, à confirmer");
     if (placed?.rooms.some((r) => r.capReached)) notes.push("quantité plafonnée par l'affichage (borne basse, sonde possible)");
 
-    const motif = paymentBlocked ? "règlement" : "capacité";
+    const motif = horsPlan ?? (accessBlocked ? "accessibilité" : paymentBlocked ? "règlement" : "capacité");
+    const sousReserve = droitAVerifier && placed ? "droit d'entrée à vérifier" : "";
     const chambres = placed ? placed.rooms.reduce((s, r) => s + r.count, 0) : d.rooms;
     plan.push({
       pnr: d.pnr,
       occupants: d.occupants,
       pax: d.adults + d.children + d.infants,
       cabine: d.cabin,
-      overlays: [d.overlays.pmr ? "PMR" : null, d.overlays.famille ? "FAMILLE" : null].filter(Boolean).join("+"),
+      overlays: [
+        d.overlays.pmr ? "PMR" : null,
+        d.overlays.famille ? "FAMILLE" : null,
+        d.overlays.groupe ? "GROUPE" : null,
+        d.overlays.animal ? "ANIMAL" : null,
+      ].filter(Boolean).join("+"),
       categorie: d.file,
       hotel: placed ? placed.hotel.name : "",
       hotel_url: placed ? placed.hotel.url : "",
@@ -222,18 +262,24 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
       transfert,
       escalade: placed ? "" : `DESK (${motif})`,
       statut: placed ? "OK" : "ESCALADE DESK",
+      hors_plan: horsPlan ?? "",
+      sous_reserve: sousReserve,
       notes: notes.join(" ; "),
     });
   }
 
-  // synthèse et manques (les manques par tier nourrissent l'extension, phase 3)
-  const summary = { parTier: {}, coutParDevise: {}, ok: 0, escalade: 0 };
+  // synthèse et manques (les manques par tier nourrissent l'extension, phase 3).
+  // Un dossier HORS PLAN (nominatif, droit d'entrée) est escaladé mais ne crée PAS de
+  // manque : il ne faut pas dépenser des sessions d'agents à chercher des chambres
+  // qu'il ne prendra pas.
+  const summary = { parTier: {}, coutParDevise: {}, ok: 0, escalade: 0, horsPlan: 0, motifs: {}, paxLoges: 0, paxNonLoges: 0 };
   const gaps = { chambresManquantes: {} };
   for (const row of plan) {
     const t = row.cabine;
     summary.parTier[t] ??= { ok: 0, escalade: 0, chambres: 0 };
     if (row.statut === "OK") {
       summary.ok += 1;
+      summary.paxLoges += Number(row.pax) || 0;
       summary.parTier[t].ok += 1;
       summary.parTier[t].chambres += row.chambres;
       if (row.prix_total !== "") {
@@ -241,8 +287,12 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
       }
     } else {
       summary.escalade += 1;
+      summary.paxNonLoges += Number(row.pax) || 0;
       summary.parTier[t].escalade += 1;
-      gaps.chambresManquantes[t] = (gaps.chambresManquantes[t] ?? 0) + row.chambres;
+      const motifRow = row.escalade.replace(/^DESK \(|\)$/g, "");
+      summary.motifs[motifRow] = (summary.motifs[motifRow] ?? 0) + 1;
+      if (row.hors_plan) summary.horsPlan += 1;
+      else gaps.chambresManquantes[t] = (gaps.chambresManquantes[t] ?? 0) + row.chambres;
     }
   }
   return { plan, summary, gaps };

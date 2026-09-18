@@ -6,8 +6,11 @@
  * ajoutent des contraintes sans changer le tier (EX-POL-2).
  */
 
+import { paxIsPmr, paxEscalade, paxAnimal, parseSsr, ssrNotes } from "./paxlist.mjs";
+
 const FB_RANK = { PLATINUM: 3, GOLD: 2, SILVER: 1, NONE: 0 };
 const CABIN_RANK = { J: 2, W: 1, Y: 0 };
+const DROIT_RANK = { NON: 2, INCONNU: 1, OUI: 0 };
 
 /**
  * @param {Array<object>} rows lignes CSV passagers
@@ -27,16 +30,33 @@ export function buildDossiers(rows, policy) {
     const adults = pax.filter((p) => p.type_pax === "ADT").length;
     const children = pax.filter((p) => p.type_pax === "CHD").length;
     const infants = pax.filter((p) => p.type_pax === "INF").length;
-    const pmr = pax.some((p) => p.assistance === "WCHR");
+    // PMR : tout code SSR d'assistance déclencheur (WCHR/WCHS/WCHC/WCBD/WCBW/WCMP/BLND/DEAF/DPNA),
+    // pas le seul littéral « WCHR » — voir lib/paxlist.mjs
+    const pmr = pax.some(paxIsPmr);
     const cabin = pax.reduce((m, p) => (CABIN_RANK[p.cabine] > CABIN_RANK[m] ? p.cabine : m), "Y");
     const fb = pax.reduce((m, p) => (FB_RANK[p.flying_blue] > FB_RANK[m] ? p.flying_blue : m), "NONE");
     const famille = children + infants > 0;
+    const animal = pax.some(paxAnimal);
+    const groupe = pax.map((p) => p.groupe).find(Boolean) ?? "";
+    // hors plan hôtel : traitement nominatif au desk (civière, médical, mineur non accompagné)
+    const escaladeNominative = pax.map(paxEscalade).find(Boolean) ?? null;
+    // droit d'entrée sur le territoire de l'escale : le plus contraignant du dossier
+    const droitEntree = pax.reduce((m, p) => (DROIT_RANK[p.droit_entree] > DROIT_RANK[m] ? p.droit_entree : m), "OUI");
+    const ssr = [...new Set(pax.flatMap((p) => p.ssr ?? parseSsr(p.assistance)))];
 
-    // chambrage : unité familiale jusqu'à family_unit_max, sinon 2 chambres même hôtel ;
-    // les nourrissons ne consomment pas de capacité (rooming.infants_no_capacity)
+    // chambrage : `chambres_demandees` de la liste fait foi (familles nombreuses, groupes,
+    // PMR à chambre individuelle) ; sinon unité familiale jusqu'à family_unit_max, sinon
+    // 2 chambres même hôtel. Les nourrissons ne consomment pas de capacité.
+    // plusieurs valeurs sous un même PNR : on retient le MAXIMUM (ne jamais sous-loger) ;
+    // la contradiction est signalée par le rapport d'ingestion
+    const demandesPnr = pax.map((p) => Number(p.chambres_demandees)).filter((n) => Number.isInteger(n) && n > 0);
+    const demandees = demandesPnr.length ? Math.max(...demandesPnr) : null;
     let rooms;
     let familyUnit = false;
-    if (children > 0) {
+    if (demandees) {
+      rooms = demandees;
+      familyUnit = demandees === 1 && children > 0;
+    } else if (children > 0) {
       const max = rooming.family_unit_max;
       if (adults <= max.adults && children <= max.children) {
         rooms = 1;
@@ -52,9 +72,14 @@ export function buildDossiers(rows, policy) {
       infants,
       cabin,
       fb,
-      overlays: { pmr, famille },
+      overlays: { pmr, famille, groupe: Boolean(groupe), animal },
       familyUnit,
       rooms,
+      roomsSource: demandees ? "liste" : "calcul",
+      groupe,
+      escaladeNominative,
+      droitEntree,
+      ssrNotes: ssrNotes(ssr),
     });
   }
 

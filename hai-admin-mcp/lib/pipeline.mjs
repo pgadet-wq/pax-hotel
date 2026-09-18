@@ -10,6 +10,7 @@
  */
 import { generatePassengers } from "./passagers.mjs";
 import { buildDossiers, computeNeeds } from "./dossiers.mjs";
+import { normalizePaxRows, splitPaxRows } from "./paxlist.mjs";
 import { allocate } from "./allocate.mjs";
 import { computeCost } from "./cout.mjs";
 import { buildMessages } from "./messages.mjs";
@@ -101,9 +102,17 @@ export function fixturesCollect(records) {
  */
 export async function runPipeline({
   client = null, policy, station, scenario, avion = DEFAULT_AVION,
-  rows = null, dossiers = null, inventaire = undefined,
+  rows = null, dossiers = null, inventaire = undefined, ingestion: ingestionIn = null,
   emit = () => {}, signal = null, extensionSignal = null, collect = null, now = new Date(),
 }) {
+  // les avertissements émis pendant le run alimentent la section « Avertissements » du rapport
+  const runWarnings = [];
+  const emitRaw = emit;
+  emit = (type, data, extra) => {
+    if (type === "warning" && data?.message) runWarnings.push(data.message);
+    return emitRaw(type, data, extra);
+  };
+
   const runId = newRunId(now);
   const { checkin, checkout } = resolveDates(scenario, now);
   const nights = scenario.nights;
@@ -120,6 +129,32 @@ export async function runPipeline({
     const gen = generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" });
     rows = gen.rows;
     emit("log", { message: `liste générée : ${gen.stats.passagers} passagers (seed ${scenario.seed})` });
+  }
+
+  // Normalisation de la liste QUELLE QUE SOIT SA SOURCE (téléversée ou générée) :
+  // les valeurs sont traduites, l'équipage et les non-embarqués sortent du plan
+  // passagers. Idempotent sur une liste déjà canonique.
+  let ingestion = ingestionIn;
+  if (!dossiers && rows) {
+    // l'appelant a déjà ingéré (CLI --in, téléversement UI) : on garde SON rapport,
+    // qui porte les vraies traductions de valeurs ; sinon on normalise ici
+    let normalized = rows;
+    if (!ingestion) {
+      const res = normalizePaxRows(rows);
+      normalized = res.rows;
+      ingestion = res.rapport;
+    }
+    const rapport = ingestion;
+    const split = splitPaxRows(normalized);
+    rows = split.pax;
+    emit("log", {
+      message: `liste passagers : ${rows.length} à loger sur ${rapport.lignes.lues} ligne(s)`,
+      // compteurs seulement : aucun nom de groupe ni valeur nominative dans le flux
+      ingestion: { ...rapport.compteurs, groupes: rapport.compteurs.groupes.length },
+    });
+    if (rapport.refus.length) emit("warning", { message: `${rapport.refus.length} ligne(s) passager illisibles écartées — voir le rapport d'ingestion` });
+    if (split.equipage.length) emit("warning", { message: `${split.equipage.length} membre(s) d'équipage hors plan passagers : une chambre individuelle par personne, à traiter au desk` });
+    if (split.exclus.length) emit("warning", { message: `${split.exclus.length} passager(s) non à loger (non embarqués, autonomes, déjà logés) : écartés du plan` });
   }
 
   /* besoins */
@@ -261,7 +296,7 @@ export async function runPipeline({
   const outputs = {
     planCsv: buildPlanCsv(alloc.plan),
     rapportMd: buildRapportMd(alloc, inventories, {
-      station, policy, checkin, checkout, nights, runId, cost,
+      station, policy, checkin, checkout, nights, runId, cost, warnings: runWarnings, ingestion,
       extension: { waves: wave - 1, probes: probedKeys.size, surveys: Math.max(0, surveyedKeys.size - selection.length), limits: { sessions_used: sessionsUsed, sessions_max: policy.extension.max_sessions_per_run, cost_usd: costUsd, cost_max: policy.extension.max_cost_usd_per_run } },
     }),
     messagesCsv: buildMessagesCsv(messages),

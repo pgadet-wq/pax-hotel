@@ -7,10 +7,10 @@ import { effectiveCaps } from "./policy.mjs";
 
 /** Colonnes §5.7 : colonnes v1 + `conformite` + ajouts v2. */
 export const PLAN_COLS = [
-  "pnr", "occupants", "cabine", "overlays", "categorie",
-  "hotel", "room_type", "chambres", "prix_total", "devise",
+  "pnr", "occupants", "pax", "cabine", "overlays", "categorie",
+  "hotel", "hotel_url", "room_type", "chambres", "prix_total", "devise",
   "conformite", "mode_reglement", "hotel_source", "provisoire",
-  "session_ref", "transfert", "escalade", "statut", "notes",
+  "session_ref", "transfert", "escalade", "hors_plan", "sous_reserve", "statut", "notes",
 ];
 
 export function buildPlanCsv(plan) {
@@ -39,7 +39,7 @@ const fmtDateTime = (iso) => {
  */
 export function buildRapportMd(alloc, inventories, ctx) {
   const { plan, summary, gaps } = alloc;
-  const { station, policy, checkin, checkout, runId, cost, extension, warnings } = ctx;
+  const { station, policy, checkin, checkout, runId, cost, extension, warnings, ingestion } = ctx;
   const nights = ctx.nights ?? Math.max(1, Math.round((new Date(checkout) - new Date(checkin)) / 86400000));
   const caps = effectiveCaps(policy, station);
   const lines = [];
@@ -61,8 +61,12 @@ export function buildRapportMd(alloc, inventories, ctx) {
   lines.push("");
   const chambresOk = plan.filter((p) => p.statut === "OK").reduce((s, p) => s + p.chambres, 0);
   const couts = Object.entries(summary.coutParDevise).map(([d, v]) => `${fmtMoney(v)} ${d}`).join(" + ") || "0";
-  lines.push(`- Dossiers hébergés en ligne : **${summary.ok}** (${chambresOk} chambres)`);
-  lines.push(`- Dossiers à escalader au desk : **${summary.escalade}**`);
+  lines.push(`- Dossiers hébergés en ligne : **${summary.ok}** (${chambresOk} chambres, ${summary.paxLoges ?? "?"} personnes)`);
+  lines.push(`- Dossiers à escalader au desk : **${summary.escalade}** — **${summary.paxNonLoges ?? "?"} personnes non logées**`);
+  if (summary.motifs && Object.keys(summary.motifs).length) {
+    lines.push(`  - motifs : ${Object.entries(summary.motifs).map(([m, n]) => `${m} ${n}`).join(" · ")}`);
+    if (summary.horsPlan) lines.push(`  - dont **${summary.horsPlan} hors plan hôtel** (traitement nominatif au desk) : relever plus d'hôtels ne les logera pas`);
+  }
   lines.push(`- Coût total relevé : **${couts}**`);
   lines.push("");
   lines.push(`| Cabine | OK | Escalade | Chambres | Plafond effectif |`);
@@ -72,6 +76,28 @@ export function buildRapportMd(alloc, inventories, ctx) {
     lines.push(`| ${tier} | ${s.ok} | ${s.escalade} | ${s.chambres} | ${caps[tier]} EUR/nuit |`);
   }
   lines.push("");
+
+  if (ingestion) {
+    const c = ingestion.compteurs ?? {};
+    lines.push(`## Liste passagers (ingestion)`);
+    lines.push("");
+    if (ingestion.fichier) {
+      lines.push(`- fichier : ${ingestion.fichier.encodage}, séparateur « ${ingestion.fichier.separateur} », ${ingestion.fichier.colonnes_lues?.length ?? "?"} colonnes lues`);
+      if (ingestion.fichier.alias_appliques?.length) lines.push(`- en-têtes traduits : ${ingestion.fichier.alias_appliques.join(", ")}`);
+      if (ingestion.fichier.colonnes_ignorees?.length) lines.push(`- colonnes ignorées : ${ingestion.fichier.colonnes_ignorees.join(", ")}`);
+      if (ingestion.fichier.lignes_ignorees?.length) {
+        lines.push(`- **${ingestion.fichier.lignes_ignorees.length} ligne(s) écartée(s) à la lecture** : ${ingestion.fichier.lignes_ignorees.slice(0, 10).map((l) => `ligne ${l.ligne} (${l.motif})`).join(" ; ")}`);
+      }
+    }
+    lines.push(`- lignes : ${ingestion.lignes?.lues ?? "?"} lues · ${ingestion.lignes?.retenues ?? "?"} retenues · ${ingestion.lignes?.refusees ?? 0} refusées`);
+    lines.push(`- à loger : ${c.a_loger ?? "?"} passagers · ${c.dossiers ?? "?"} dossiers — J ${c.parCabine?.J ?? 0} / W ${c.parCabine?.W ?? 0} / Y ${c.parCabine?.Y ?? 0}`);
+    lines.push(`- types : ${c.parType?.ADT ?? 0} ADT, ${c.parType?.CHD ?? 0} CHD, ${c.parType?.INF ?? 0} INF · PMR ${c.pmr ?? 0} · animaux ${c.animaux ?? 0} · groupes ${c.groupes?.length ?? 0}`);
+    lines.push(`- hors plan hôtel : ${c.escalades?.nominative ?? 0} nominative(s) · ${c.escalades?.droit_entree ?? 0} sur droit d'entrée · équipage ${c.equipage ?? 0}`);
+    const exclus = Object.entries(c.exclus ?? {}).map(([k, n]) => `${k} ${n}`).join(", ");
+    if (exclus) lines.push(`- exclus du plan (non logés) : ${exclus}`);
+    if (ingestion.alias_valeurs?.length) lines.push(`- valeurs traduites : ${ingestion.alias_valeurs.join(" · ")}`);
+    lines.push("");
+  }
 
   lines.push(`## Relevés par hôtel`);
   lines.push("");
@@ -145,10 +171,12 @@ export function buildRapportMd(alloc, inventories, ctx) {
     lines.push("");
   }
 
-  if (warnings?.length) {
+  const avertIngestion = (ingestion?.avertissements ?? []).map((a) => `liste passagers : ${a.message ?? a}`);
+  const tousAvert = [...avertIngestion, ...(warnings ?? [])];
+  if (tousAvert.length) {
     lines.push(`## Avertissements`);
     lines.push("");
-    for (const w of warnings) lines.push(`- ${w}`);
+    for (const w of tousAvert) lines.push(`- ${w}`);
     lines.push("");
   }
 

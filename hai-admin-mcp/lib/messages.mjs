@@ -1,7 +1,12 @@
 /**
  * Messages passagers FR/EN (CDC §8.2) — génération déterministe par gabarit,
  * AUCUN appel de LLM (EX-MSG-3). Un message par dossier (PNR), en FR et en EN,
- * trois variantes : affecté, provisoire, escalade (EX-MSG-1).
+ * quatre variantes : affecté, provisoire, escalade, hors_plan (EX-MSG-1).
+ *
+ * `hors_plan` couvre les dossiers que le desk prend en charge nominativement
+ * (civière, médical, mineur non accompagné, droit d'entrée refusé) : ni convocation
+ * au comptoir, ni promesse d'hôtel ou de transfert — un passager allongé sur civière
+ * ne « se présente » pas, un passager retenu en zone de transit ne prend pas de taxi.
  *
  * Les gabarits vivent dans `data/messages/fr.md` et `en.md` (éditables). Un
  * placeholder inconnu dans un gabarit, une variante manquante ou un placeholder
@@ -13,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 const TEMPLATES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "messages");
 
-export const VARIANTS = ["affecte", "provisoire", "escalade"];
+export const VARIANTS = ["affecte", "provisoire", "escalade", "hors_plan"];
 export const PLACEHOLDERS = [
   "pnr", "hotel_name", "hotel_address", "hotel_url", "transfer_mode", "max_transfer_min",
   "mode_reglement_texte", "repas_texte", "next_update_time", "station_name", "contact_channel",
@@ -128,7 +133,9 @@ export function buildMessages(plan, station, scenario, policy, opts = {}) {
   const out = [];
   for (const row of plan) {
     const variante =
-      row.statut !== "OK" ? "escalade" : row.provisoire === true || row.provisoire === "true" ? "provisoire" : "affecte";
+      row.hors_plan ? "hors_plan"
+        : row.statut !== "OK" ? "escalade"
+          : row.provisoire === true || row.provisoire === "true" ? "provisoire" : "affecte";
     for (const lang of ["fr", "en"]) {
       const values = {
         pnr: row.pnr,

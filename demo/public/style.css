@@ -317,3 +317,15 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
   .form-col { flex-basis: auto; width: 100%; max-height: none; }
   .banner { top: 0; }
 }
+
+/* rapport d'ingestion de la liste passagers (point de contrôle avant run) */
+#pax-stats.ingestion { color: var(--ink); font-size: 0.92em; line-height: 1.55; border-left: 3px solid var(--ok); padding-left: 10px; margin: 6px 0; }
+#pax-stats.erreur { color: var(--err); font-size: 0.95em; line-height: 1.55; border-left: 3px solid var(--err); padding-left: 10px; margin: 6px 0; }
+#pax-stats .avert { color: var(--warn); }
+#pax-stats ul { margin: 4px 0 0 18px; padding: 0; }
+
+/* source de la liste passagers, visible en permanence au-dessus du lancement */
+.source-liste { font-size: 0.95em; margin: 8px 0 4px; padding: 6px 10px; border-radius: 4px; }
+.source-liste.reelle { background: #e8f5ec; color: var(--ok); border: 1px solid var(--ok); }
+.source-liste.generee { background: #fff6e5; color: var(--warn); border: 1px solid var(--warn); }
+.source-liste.refus { background: var(--esc-bg); color: var(--err); border: 1px solid var(--err); }

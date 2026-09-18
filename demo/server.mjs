@@ -21,7 +21,7 @@ import { DEFAULT_AVION, DEFAULT_SCENARIO, mergeConfig, resolveDates } from "../h
 import { loadStation, listStations } from "../hai-admin-mcp/lib/stations.mjs";
 import { loadInventaire, normalizeInventaire, isStale, candidatesFrom, slugify, INVENTAIRE_DIR } from "../hai-admin-mcp/lib/inventaire.mjs";
 import { generatePassengers } from "../hai-admin-mcp/lib/passagers.mjs";
-import { parsePassagersCsv } from "../hai-admin-mcp/lib/csv.mjs";
+import { ingestPassagers, IngestError } from "../hai-admin-mcp/lib/paxlist.mjs";
 import { buildDossiers, computeNeeds } from "../hai-admin-mcp/lib/dossiers.mjs";
 import { discoveryNeeded } from "../hai-admin-mcp/lib/discovery.mjs";
 import { planExtension } from "../hai-admin-mcp/lib/capacite.mjs";
@@ -60,7 +60,7 @@ function sendJson(res, status, obj, headers = {}) {
   res.end(body);
 }
 
-function readBody(req, { limit = MAX_BODY } = {}) {
+function readBody(req, { limit = MAX_BODY, raw = false } = {}) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
@@ -73,7 +73,7 @@ function readBody(req, { limit = MAX_BODY } = {}) {
       }
       chunks.push(c);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("end", () => resolve(raw ? Buffer.concat(chunks) : Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
 }
@@ -106,6 +106,8 @@ export function createDemoServer(opts = {}) {
   const manager = createRunManager({ hub, outDir: dirs.outDir });
   const invRefresher = createInventaireRefresher({ hub, inventaireDir: dirs.inventaireDir });
   let uploadedRows = null; // dernière liste passagers téléversée (mémoire process)
+  let uploadedInfo = null; // résumé d'ingestion exposé à l'UI (jamais nominatif)
+  let uploadedRapport = null; // rapport d'ingestion complet, repris tel quel dans le rapport de run
   let haiClient = null; // client H partagé, créé au premier run réel (journal du point d'entrée EU)
 
   async function getHaiClient() {
@@ -148,6 +150,7 @@ export function createDemoServer(opts = {}) {
       })),
       presets: listPresets(),
       sim_stations: SIM_STATIONS,
+      uploaded: uploadedInfo,
       runInProgress: manager.isRunning(),
     });
   }
@@ -240,10 +243,12 @@ export function createDemoServer(opts = {}) {
   }
 
   /** Dry-run synchrone (aucun agent) : besoins, inventaire, décision, URLs, extension théorique. */
-  function dryRun({ policy, avion, scenario }) {
+  function dryRun({ policy, avion, scenario }, body = {}) {
     const station = loadStation(scenario.station);
     const { checkin, checkout } = resolveDates(scenario);
-    const rows = uploadedRowsFor(scenario) ?? generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" }).rows;
+    // la source de liste vient de la RACINE du corps : `ScenarioSchema` ne déclare pas
+    // `passengers`, zod la supprimerait du scénario (le dry-run partirait sur la liste générée)
+    const rows = uploadedRowsFor(body) ?? generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" }).rows;
     const dossiers = buildDossiers(rows, policy);
     const needs = computeNeeds(dossiers);
     const inv = loadInventaire(station.code, { dir: dirs.inventaireDir });
@@ -261,6 +266,8 @@ export function createDemoServer(opts = {}) {
       station: { code: station.code, name: station.name },
       checkin, checkout, nights: scenario.nights,
       passagers: rows.length, dossiers: dossiers.length,
+      source_liste: uploadedRowsFor(body) ? "téléversée" : "générée",
+      uploaded: uploadedInfo,
       caps: effectiveCaps(policy, station),
       needs: needs.parTier,
       inventaire: { hotels: inv?.hotels?.length ?? 0, updated_at: inv?.updated_at ?? null, stale: isStale(inv, policy) },
@@ -285,7 +292,12 @@ export function createDemoServer(opts = {}) {
     } catch (err) {
       throw new HttpError(400, `configuration invalide : ${err.issues?.map((i) => `${i.path.join(".")} ${i.message}`).join(" ; ") ?? err.message}`);
     }
-    if (body.dry_run === true) return sendJson(res, 200, dryRun(config));
+    if (body.dry_run === true) {
+      // même refus que le run réel : un dry-run qui replie en silence sur la liste
+      // générée donnerait un dimensionnement de passagers qui n'existent pas
+      if (body.passengers === "uploaded" && !uploadedRows) throw new HttpError(400, "aucune liste passagers téléversée");
+      return sendJson(res, 200, dryRun(config, body));
+    }
 
     const { policy, avion, scenario } = config;
     const station = loadStation(scenario.station);
@@ -300,7 +312,7 @@ export function createDemoServer(opts = {}) {
       if (invRefresher.isRunning()) throw new HttpError(409, "un rafraîchissement d'inventaire est en cours (INV-10)");
       const client = await getHaiClient();
       const { runId } = manager.start({
-        policy, avion, scenario, station, rows,
+        policy, avion, scenario, station, rows, ingestion: rows ? uploadedRapport : null,
         simulate: false,
         collectFactory: () => realCollect(client),
       });
@@ -314,7 +326,7 @@ export function createDemoServer(opts = {}) {
     }
     const speed = Math.min(1000, Math.max(1, Number(body.sim_speed) || 1));
     const { runId } = manager.start({
-      policy, avion, scenario, station, rows,
+      policy, avion, scenario, station, rows, ingestion: rows ? uploadedRapport : null,
       inventaire: loadSimInventaire(),
       simulate: true,
       collectFactory: ({ signal, extensionSignal }) => createSimulation({ speed, signal, extensionSignal }),
@@ -411,20 +423,49 @@ export function createDemoServer(opts = {}) {
           }
           const seed = Number.isInteger(body.seed) ? body.seed : 42;
           const { stats } = generatePassengers({ seats, seed, fill: "exact" });
+          // choix explicite de la liste générée : la liste téléversée est OUBLIÉE,
+          // sinon un rechargement d'onglet la remettrait en source du prochain run
+          uploadedRows = null;
+          uploadedInfo = null;
+          uploadedRapport = null;
           return sendJson(res, 200, { stats });
         }
         case "POST /api/passengers": {
-          const text = await readBody(req);
-          let rows;
+          const bytes = await readBody(req, { raw: true });
+          let ing;
           try {
-            rows = parsePassagersCsv(text);
+            ing = ingestPassagers(bytes);
           } catch (err) {
+            if (err instanceof IngestError) {
+              // liste REFUSÉE : le rapport part avec l'erreur pour que l'opérateur
+              // sache quelle ligne corriger (jamais un repli silencieux)
+              uploadedRows = null;
+              uploadedInfo = null;
+              uploadedRapport = null;
+              return sendJson(res, 400, { error: String(err.message), rapport: err.rapport ?? null });
+            }
             throw new HttpError(400, String(err.message));
           }
-          uploadedRows = rows;
-          const parCabine = { J: 0, W: 0, Y: 0 };
-          for (const r of rows) parCabine[r.cabine] = (parCabine[r.cabine] ?? 0) + 1;
-          return sendJson(res, 200, { stats: { passagers: rows.length, dossiers: new Set(rows.map((r) => r.pnr)).size, parCabine } });
+          uploadedRows = ing.pax;
+          uploadedRapport = ing.rapport;
+          uploadedInfo = {
+            passagers: ing.rapport.compteurs.a_loger,
+            dossiers: new Set(ing.pax.map((r) => r.pnr)).size,
+            lignes: ing.rapport.lignes,
+            parCabine: ing.rapport.compteurs.parCabine,
+            parType: ing.rapport.compteurs.parType,
+            pmr: ing.rapport.compteurs.pmr,
+            groupes: ing.rapport.compteurs.groupes,
+            animaux: ing.rapport.compteurs.animaux,
+            escalades: ing.rapport.compteurs.escalades,
+            equipage: ing.equipage.length,
+            exclus: ing.rapport.compteurs.exclus,
+            fichier: ing.rapport.fichier ? { encodage: ing.rapport.fichier.encodage, separateur: ing.rapport.fichier.separateur, alias_appliques: ing.rapport.fichier.alias_appliques, colonnes_ignorees: ing.rapport.fichier.colonnes_ignorees, lignes_ignorees: ing.rapport.fichier.lignes_ignorees } : null,
+            alias_valeurs: ing.rapport.alias_valeurs,
+            avertissements: ing.rapport.avertissements.map((a) => a.message),
+            recu_le: new Date().toISOString(),
+          };
+          return sendJson(res, 200, { stats: uploadedInfo });
         }
         case "POST /api/run":
           return await postRun(parseJson(await readBody(req)), res);

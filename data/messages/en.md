@@ -61,3 +61,18 @@ Meals: {{repas_texte}}
 Next update: {{next_update_time}}.
 
 Thank you for your patience, and our apologies for the inconvenience.
+## hors_plan
+
+subject: Individual assistance — booking {{pnr}}
+
+Hello,
+
+Following the disruption of your flight at {{station_name}}, your situation requires individual assistance (booking {{pnr}}).
+
+A company agent is coming to you: please STAY WHERE YOU ARE and do not make your way to the desk.
+
+This message does not offer hotel accommodation: your case is being handled personally with you, according to your situation (medical assistance, escort, entry formalities).
+
+Next update: {{next_update_time}}. If you need immediate help, please signal a company agent near you.
+
+Thank you for your patience.

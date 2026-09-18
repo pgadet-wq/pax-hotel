@@ -66,7 +66,8 @@ const S = {
   messagesRunId: null,
   msgLang: "fr",
   msgTier: "",
-  passengersMode: "generated",
+  passengersMode: "generated", // "uploaded" | "generated" | null (liste refusée : lancement verrouillé)
+  uploaded: null, // rapport d'ingestion de la liste téléversée
   elapsedTimer: null,
 };
 
@@ -219,7 +220,8 @@ function renderStatus() {
   $("run-id").textContent = r?.runId ? `run ${r.runId} · ${r.station ?? ""}${r.simulate ? " · simulation" : ""}` : "";
   $("btn-cancel").classList.toggle("hidden", st !== "running");
   $("btn-cancel-ext").classList.toggle("hidden", !(st === "running" && r?.phase === "extension"));
-  $("btn-run").disabled = st === "running";
+  $("btn-run").disabled = st === "running" || S.passengersMode === null;
+  renderSourceListe();
   if (st === "running" && !S.elapsedTimer) {
     S.elapsedTimer = setInterval(renderElapsed, 1000);
   } else if (st !== "running" && S.elapsedTimer) {
@@ -227,6 +229,29 @@ function renderStatus() {
     S.elapsedTimer = null;
     renderElapsed();
   }
+}
+
+/** Source de la liste, affichée EN PERMANENCE à côté du bouton de lancement. */
+function renderSourceListe() {
+  const box = $("source-liste");
+  if (!box) return;
+  clear(box);
+  if (S.passengersMode === null) {
+    box.className = "source-liste refus";
+    box.append(el("strong", { text: "Liste refusée — corrigez le fichier, ou cliquez « Générer la liste » pour partir sur une liste fictive" }));
+    return;
+  }
+  if (S.passengersMode === "uploaded") {
+    const u = S.uploaded;
+    box.className = "source-liste reelle";
+    box.append(el("strong", { text: "LISTE : téléversée" }), el("span", {
+      text: u ? ` — ${fmtInt(u.passagers)} passagers à loger, ${fmtInt(u.dossiers)} dossiers` +
+        (u.lignes ? ` (${fmtInt(u.lignes.lues)} lignes lues)` : "") : "",
+    }));
+    return;
+  }
+  box.className = "source-liste generee";
+  box.append(el("strong", { text: "LISTE : GÉNÉRÉE" }), el("span", { text: " — passagers fictifs, aucun passager réel" }));
 }
 
 function renderElapsed() {
@@ -732,6 +757,10 @@ function renderDryRun(rep) {
   panel.classList.remove("hidden");
   const body = $("dry-run-body");
   clear(body);
+  const src = el("p", { class: rep.source_liste === "téléversée" ? "source-liste reelle" : "source-liste generee" });
+  src.append(el("strong", { text: rep.source_liste === "téléversée" ? "LISTE : téléversée" : "LISTE : GÉNÉRÉE (aucun passager réel)" }));
+  if (rep.uploaded?.recu_le) src.append(el("span", { text: ` — reçue le ${new Date(rep.uploaded.recu_le).toLocaleString("fr-FR")}` }));
+  body.append(src);
   const grid = el("div", { class: "dry-run-grid" });
   grid.append(
     el("div", { class: "cell" },
@@ -784,6 +813,10 @@ async function generatePax() {
     });
     const s = res.stats;
     S.passengersMode = "generated";
+    S.uploaded = null;
+    $("f-upload").value = "";
+    renderStatus();
+    $("pax-stats").className = "hint";
     $("pax-stats").textContent =
       `${fmtInt(s.passagers)} passagers · ${fmtInt(s.dossiers)} dossiers — J ${s.parCabine.J} / W ${s.parCabine.W} / Y ${s.parCabine.Y} · ` +
       `${s.parType.ADT} ADT, ${s.parType.CHD} CHD, ${s.parType.INF} INF · ${s.pmr} PMR (seed ${s.seed})`;
@@ -794,15 +827,58 @@ async function generatePax() {
 
 async function uploadPax(file) {
   try {
-    const text = await file.text();
-    const res = await api("POST", "/api/passengers", text, { raw: true });
+    // octets bruts : `file.text()` décoderait TOUJOURS en UTF-8 et corromprait
+    // silencieusement un export Excel FR (windows-1252) — la détection est serveur
+    const bytes = await file.arrayBuffer();
+    const res = await api("POST", "/api/passengers", bytes, { raw: true });
     S.passengersMode = "uploaded";
-    $("pax-stats").textContent =
-      `liste téléversée : ${fmtInt(res.stats.passagers)} passagers · ${fmtInt(res.stats.dossiers)} dossiers — ` +
-      `J ${res.stats.parCabine.J ?? 0} / W ${res.stats.parCabine.W ?? 0} / Y ${res.stats.parCabine.Y ?? 0} (utilisée au prochain run)`;
+    S.uploaded = res.stats;
+    renderIngestion(res.stats, file.name);
+    renderStatus();
   } catch (err) {
-    $("pax-stats").textContent = `CSV refusé : ${err.message}`;
+    // liste refusée : plus AUCUNE source valide — le lancement est verrouillé jusqu'à
+    // un choix explicite (nouveau fichier, ou « Générer la liste »)
+    S.passengersMode = null;
+    S.uploaded = null;
+    $("f-upload").value = "";
+    renderStatus();
+    const box = $("pax-stats");
+    box.className = "erreur";
+    clear(box);
+    box.append(el("strong", { text: "Liste passagers REFUSÉE — le run partirait sur la liste générée" }));
+    box.append(el("br"));
+    box.append(el("span", { text: String(err.message) }));
+    if (err.data?.rapport?.refus?.length) {
+      const ul = el("ul");
+      for (const r of err.data.rapport.refus.slice(0, 10)) ul.append(el("li", { text: r.message }));
+      box.append(ul);
+    }
   }
+}
+
+/** Rapport d'ingestion : le point de contrôle avant tout run (INV-9 : textContent seulement). */
+function renderIngestion(stats, fileName) {
+  const box = $("pax-stats");
+  box.className = "ingestion";
+  clear(box);
+  if (!stats) return;
+  const l = (t, strong = false) => box.append(el(strong ? "strong" : "span", { text: t }), el("br"));
+  l(`Liste téléversée${fileName ? ` : ${fileName}` : ""} — ${fmtInt(stats.passagers)} passagers à loger · ${fmtInt(stats.dossiers)} dossiers`, true);
+  const lg = stats.lignes ?? {};
+  const ecartees = stats.fichier?.lignes_ignorees?.length ?? 0;
+  l(`lignes : ${fmtInt(lg.lues ?? 0)} lues · ${fmtInt(lg.retenues ?? 0)} retenues · ${ecartees} écartée(s) · ${fmtInt(lg.refusees ?? 0)} refusée(s)`);
+  for (const li of stats.fichier?.lignes_ignorees ?? []) {
+    box.append(el("span", { class: "avert", text: `⚠ ligne ${li.ligne} écartée : ${li.motif}` }), el("br"));
+  }
+  l(`J ${stats.parCabine?.J ?? 0} / W ${stats.parCabine?.W ?? 0} / Y ${stats.parCabine?.Y ?? 0} · ` +
+    `${stats.parType?.ADT ?? 0} ADT, ${stats.parType?.CHD ?? 0} CHD, ${stats.parType?.INF ?? 0} INF · ` +
+    `${stats.pmr ?? 0} PMR · ${stats.groupes?.length ?? 0} groupe(s) · ${stats.animaux ?? 0} animal/animaux`);
+  l(`escalades nominatives ${stats.escalades?.nominative ?? 0} · droit d'entrée ${stats.escalades?.droit_entree ?? 0} · ` +
+    `équipage hors plan ${stats.equipage ?? 0} · lignes refusées ${stats.lignes?.refusees ?? 0}`);
+  if (stats.fichier) l(`fichier : ${stats.fichier.encodage}, séparateur « ${stats.fichier.separateur} »` +
+    (stats.fichier.alias_appliques?.length ? ` · en-têtes traduits : ${stats.fichier.alias_appliques.join(", ")}` : ""));
+  if (stats.alias_valeurs?.length) l(`valeurs traduites : ${stats.alias_valeurs.join(" · ")}`);
+  for (const a of stats.avertissements ?? []) box.append(el("span", { class: "avert", text: `⚠ ${a}` }), el("br"));
 }
 
 /* ----------------------------------------------------------- inventaire */
@@ -912,6 +988,13 @@ function switchTab(tab) {
 async function init() {
   S.config = await api("GET", "/api/config");
   S.stations = S.config.stations; // déjà triées par demo_priority (BKK d'abord, EX-STA-1)
+  S.uploaded = S.config.uploaded ?? null;
+  if (S.config.uploaded) {
+    // une liste téléversée vit dans le serveur : sans cette restauration, un simple
+    // rechargement d'onglet relancerait le run sur la liste GÉNÉRÉE, sans rien dire
+    S.passengersMode = "uploaded";
+    renderIngestion(S.config.uploaded, null);
+  }
 
   for (const sel of [$("f-station"), $("inv-station")]) {
     clear(sel);

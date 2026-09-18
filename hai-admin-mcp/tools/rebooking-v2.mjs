@@ -28,7 +28,7 @@ import { loadInventaire, isStale, candidatesFrom, slugify } from "../lib/inventa
 import { DEFAULT_POLICY, effectiveCaps } from "../lib/policy.mjs";
 import { mergeConfig, resolveDates, DEFAULT_AVION, newRunId } from "../lib/scenario.mjs";
 import { generatePassengers } from "../lib/passagers.mjs";
-import { parsePassagersCsv } from "../lib/csv.mjs";
+import { ingestPassagers, formatRapport, IngestError } from "../lib/paxlist.mjs";
 import { buildDossiers, computeNeeds } from "../lib/dossiers.mjs";
 import { discoveryNeeded, runDiscovery } from "../lib/discovery.mjs";
 import { planExtension, runProbe } from "../lib/capacite.mjs";
@@ -71,9 +71,31 @@ const { policy, avion, scenario } = mergeConfig({
 });
 const { checkin, checkout } = resolveDates(scenario);
 
-const rows = opt("in", null)
-  ? parsePassagersCsv(fs.readFileSync(path.resolve(opt("in", null)), "utf8"))
-  : generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" }).rows;
+/* Liste passagers : fichier compagnie (ingestion PAXLIST v1, rapport imprimé et
+   BLOQUANT sur valeur illisible) ou liste générée (avion plein, seed du scénario). */
+let rows;
+let ingestion = null;
+if (opt("in", null)) {
+  const fichier = path.resolve(opt("in", null));
+  try {
+    const ing = ingestPassagers(fs.readFileSync(fichier));
+    console.log(`Liste passagers : ${fichier}`);
+    console.log(formatRapport(ing.rapport));
+    if (ing.equipage.length) console.log(`  (${ing.equipage.length} ligne(s) d'équipage hors plan passagers)`);
+    if (ing.exclus.length) console.log(`  (${ing.exclus.length} ligne(s) non à loger)`);
+    console.log("");
+    rows = ing.pax;
+    ingestion = ing.rapport;
+  } catch (err) {
+    if (!(err instanceof IngestError)) throw err;
+    console.error(`\nListe passagers REFUSÉE — ${fichier}\n`);
+    console.error(err.message);
+    if (err.rapport) console.error(`\n${formatRapport(err.rapport)}`);
+    process.exit(2);
+  }
+} else {
+  rows = generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" }).rows;
+}
 
 /* ---------------------------------------------------------------- dry-run */
 
@@ -141,7 +163,7 @@ if (offline) {
   });
 
   const result = await runPipeline({
-    policy, station, scenario, avion, rows,
+    policy, station, scenario, avion, rows, ingestion,
     emit, collect: fixturesCollect(records),
   });
 
@@ -398,7 +420,7 @@ const emit = mkEmitter({ run_id: null }, (ev) => {
   else if (ev.type === "done") console.log(`[done ] OK ${d.ok} · escalade ${d.escalade} · sessions ${d.sessions_used ?? 0} · coût ${d.cost_usd ?? 0} $`);
 });
 const client = createClient();
-const result = await runPipeline({ client, policy, station, scenario, avion, rows, emit });
+const result = await runPipeline({ client, policy, station, scenario, avion, rows, ingestion, emit });
 fs.mkdirSync(OUT_DIR, { recursive: true });
 for (const [name, content] of [
   [`plan-${result.runId}.csv`, result.outputs.planCsv],

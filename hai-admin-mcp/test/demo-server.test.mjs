@@ -251,3 +251,44 @@ test("EX-INV-8 : GET/PUT inventaire — drapeaux persistés, ajout manuel, entr�
   // ajout sans nom : refusé
   assert.equal((await call("PUT", "/api/inventaire/BKK", { add: [{ url: "https://x" }] })).status, 400);
 });
+
+test("liste passagers : le dry-run part de la liste TÉLÉVERSÉE, et la source survit au rechargement", async (t) => {
+  const { call } = await boot(t);
+  // dry-run sans téléversement : liste générée (comportement historique)
+  const avant = await call("POST", "/api/run", { dry_run: true, scenario: { station: "BKK" }, avion: { nom: "A350-900", seats: { J: 34, W: 24, Y: 266 } } });
+  assert.equal(avant.status, 200);
+  assert.equal(avant.data.passagers, 324);
+  assert.equal(avant.data.source_liste, "générée");
+
+  const csv =
+    "pnr;nom;prenom;type_pax;cabine;categorie;statut_pax;assistance;droit_entree\n" +
+    "AA11BB;MARTIN;Jean;ADT;J;PAX;EMBARQUE;WCHS;OUI\n" +
+    "AA11BB;MARTIN;Marie;ADT;J;PAX;EMBARQUE;;OUI\n" +
+    "CC22DD;DUPONT;Luc;ADT;Y;PAX;NOSHOW;;OUI\n" +
+    "CRW01;BERNARD;Ana;ADT;Y;PNC;EMBARQUE;;OUI\n";
+  const up = await call("POST", "/api/passengers", csv, true);
+  assert.equal(up.status, 200);
+  assert.equal(up.data.stats.passagers, 2, "no-show et équipage sortent du plan passagers");
+  assert.equal(up.data.stats.pmr, 1, "WCHS déclenche PMR");
+  assert.equal(up.data.stats.equipage, 1);
+
+  // le dry-run doit dimensionner sur CETTE liste, pas sur l'A350 généré
+  const apres = await call("POST", "/api/run", { dry_run: true, passengers: "uploaded", scenario: { station: "BKK" } });
+  assert.equal(apres.status, 200);
+  assert.equal(apres.data.passagers, 2);
+  assert.equal(apres.data.dossiers, 1);
+  assert.equal(apres.data.source_liste, "téléversée");
+
+  // la source vit côté serveur : un onglet rechargé la retrouve dans /api/config
+  const cfg = await call("GET", "/api/config");
+  assert.equal(cfg.data.uploaded.passagers, 2);
+  assert.equal(cfg.data.uploaded.dossiers, 1);
+
+  // liste illisible : 400 AVEC le rapport, et la liste précédente n'est pas conservée en douce
+  const bad = await call("POST", "/api/passengers", "pnr;nom;type_pax;cabine\nZZ1;TEST;ADT;C\n", true);
+  assert.equal(bad.status, 400);
+  assert.ok(/cabine/.test(bad.data.error));
+  assert.ok(bad.data.rapport.refus.length >= 1);
+  const cfg2 = await call("GET", "/api/config");
+  assert.equal(cfg2.data.uploaded, null);
+});

@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ROOT } from "./helpers.mjs";
@@ -44,7 +45,27 @@ test("CLI rebooking-v2 : --offline rejoue les fixtures — plan, rapport, messag
     assert.ok(m, `sortie ${kind}* absente de la sortie CLI`);
     assert.ok(fs.existsSync(path.join(ROOT, "out", m[1])), `${m[1]} non écrit`);
   }
-  assert.match(r.stdout, /dossiers logés/);
+  // référence de non-régression : le rejeu est déterministe (fixtures + seed 42).
+  // Toute évolution du noyau qui déplace ce couple doit être un choix, pas une surprise.
+  assert.match(r.stdout, /88 dossiers logés, 69 en escalade/, "référence hors ligne 88/69 déplacée");
+});
+
+test("CLI rebooking-v2 : --in ingère une liste compagnie et refuse une valeur illisible", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pax-cli-"));
+  const bon = path.join(dir, "ok.csv");
+  fs.writeFileSync(bon, "pnr;nom;prenom;type_pax;cabine;categorie;statut_pax;assistance\nAA11BB;MARTIN;Jean;ADT;BUSINESS;PAX;EMBARQUE;WCHS\nCC22DD;DUPONT;Luc;ADT;Y;PNC;EMBARQUE;\n", "utf8");
+  const r = run(CLI, "--dry-run", "--station", "BKK", "--in", bon);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /PMR 1/);
+  assert.match(r.stdout, /1 ligne\(s\) d'équipage hors plan/);
+  assert.match(r.stdout, /1 passagers, 1 dossiers/);
+
+  const mauvais = path.join(dir, "ko.csv");
+  fs.writeFileSync(mauvais, "pnr;nom;type_pax;cabine\nAA11BB;MARTIN;ADT;C\n", "utf8");
+  const bad = run(CLI, "--dry-run", "--station", "BKK", "--in", mauvais);
+  assert.equal(bad.status, 2, "une valeur illisible doit faire échouer la commande");
+  assert.match(bad.stderr, /REFUSÉE/);
+  assert.match(bad.stderr, /cabine/);
 });
 
 test("CLI rebooking-v2 : commandes payantes refusées sans DEMO_ALLOW_PAID=1 (INV-8)", () => {

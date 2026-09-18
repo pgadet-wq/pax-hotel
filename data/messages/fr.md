@@ -1,7 +1,7 @@
 # Gabarits des messages passagers — FR
 
-Fichier éditable (CDC §8.2). Trois variantes obligatoires : `affecte`, `provisoire`,
-`escalade`. Chaque variante commence par une ligne `sujet:` ; le reste du bloc est le
+Fichier éditable (CDC §8.2). Quatre variantes obligatoires : `affecte`, `provisoire`,
+`escalade`, `hors_plan`. Chaque variante commence par une ligne `sujet:` ; le reste du bloc est le
 corps du message. Placeholders disponibles : `{{pnr}}`, `{{hotel_name}}`,
 `{{hotel_address}}`, `{{hotel_url}}`, `{{transfer_mode}}`, `{{max_transfer_min}}`,
 `{{mode_reglement_texte}}`, `{{repas_texte}}`, `{{next_update_time}}`,
@@ -61,3 +61,18 @@ Repas : {{repas_texte}}
 Prochain point d'information : {{next_update_time}}.
 
 Nous vous remercions de votre patience et vous prions de nous excuser pour ce contretemps.
+## hors_plan
+
+sujet: Votre prise en charge individuelle — dossier {{pnr}}
+
+Bonjour,
+
+À la suite de l'immobilisation de votre vol à {{station_name}}, votre situation demande une prise en charge individuelle (dossier {{pnr}}).
+
+Un agent de la compagnie vient vers vous : merci de RESTER À VOTRE PLACE, ou à l'endroit où vous vous trouvez, et de ne pas vous déplacer vers le comptoir.
+
+Aucun hébergement hôtelier ne vous est proposé par ce message : votre solution est traitée personnellement avec vous, selon votre situation (assistance médicale, accompagnement, formalités d'entrée sur le territoire).
+
+Prochain point d'information : {{next_update_time}}. En cas de besoin immédiat, signalez-vous à un agent de la compagnie près de vous.
+
+Nous vous remercions de votre patience.

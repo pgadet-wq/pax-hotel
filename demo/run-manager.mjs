@@ -227,7 +227,7 @@ export function createRunManager({ hub, outDir }) {
      * @param {object} args {policy, avion, scenario, station, rows?, inventaire?, collectFactory, simulate}
      * @returns {{runId: string}} — le run continue en tâche de fond dans le process
      */
-    start({ policy, avion, scenario, station, rows = null, inventaire = undefined, collectFactory, simulate = false }) {
+    start({ policy, avion, scenario, station, rows = null, ingestion = null, inventaire = undefined, collectFactory, simulate = false }) {
       if (st.state === "running") throw new HttpError(409, "un run est déjà en cours (INV-10)");
       const now = new Date();
       const runId = newRunId(now);
@@ -258,6 +258,7 @@ export function createRunManager({ hub, outDir }) {
         scenario,
         avion,
         rows,
+        ingestion,
         inventaire,
         emit,
         signal: controller.signal,
