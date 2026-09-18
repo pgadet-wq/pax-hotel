@@ -28,6 +28,7 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 ## En cours
 
 - Rien. (Les tâches de fond du 15/09 — Étage 0 réel et rapatriement des captures — sont terminées : 98/99 captures sous `out/captures-mu2gsy9c/`.)
+- 19/09 (hors phase) — **format de la liste passagers spécifié** : `docs/format-liste-passagers.md` (PAXLIST v1) + modèle vierge, dictionnaire et exemple sous `data/exemples/`. Issu de l'audit d'aptitude au test réel du 18/09 : l'ingestion actuelle ne valide AUCUNE valeur (cabine hors J/W/Y → Y en silence, `type_pax` hors ADT/CHD/INF → 0 adulte, seul `WCHR` exact déclenche PMR, PNR vide fusionne les dossiers). **Spécifié, non implémenté** (lot ≈ 2,75 j décrit au §6 de la spéc). En attente de la liste passagers réelle de la compagnie. `data/paxlist*.csv` ajouté au `.gitignore` : une liste réelle ne se commite jamais.
 
 ## Décisions prises
 
@@ -44,7 +45,7 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 
 ## Écarts d'arborescence vs CDC §4
 
-- En plus : `hai-admin-mcp/package-lock.json` ; `out/*` (local, ignoré) ; `test/helpers.mjs` ; `test/phase0.test.mjs` ; `lib/hai-urls.mjs` ; `lib/pipeline.mjs` ; `demo/sim-assets/*.png` (4 captures RÉELLES depuis la ph. 5) ; `demo/inventaire-refresh.mjs` ; `data/presets/politique-standard.json` ; `data/simulate/inventaire-reel-bkk.json` ; `docs/{recette-demo-v2,deroule-demo}.md` ; dry-run via `POST /api/run {dry_run:true}`.
+- En plus : `hai-admin-mcp/package-lock.json` ; `out/*` (local, ignoré) ; `test/helpers.mjs` ; `test/phase0.test.mjs` ; `lib/hai-urls.mjs` ; `lib/pipeline.mjs` ; `demo/sim-assets/*.png` (4 captures RÉELLES depuis la ph. 5) ; `demo/inventaire-refresh.mjs` ; `data/presets/politique-standard.json` ; `data/simulate/inventaire-reel-bkk.json` ; `docs/{recette-demo-v2,deroule-demo,format-liste-passagers}.md` ; `data/exemples/paxlist-*.csv` ; dry-run via `POST /api/run {dry_run:true}`.
 - `hai-admin-mcp/package.json` : `main`/`bin` → `src/server.mjs` absent (référence morte assumée, POC intact).
 
 ## Environnement (H-8, relevé le 14/09)
