@@ -4,6 +4,16 @@ Règles appliquées par le moteur v2 (déterministe : les agents relèvent, le c
 Défauts dans [lib/policy.mjs](../hai-admin-mcp/lib/policy.mjs) (`DEFAULT_POLICY`), tout est éditable dans le
 formulaire de l'UI ou par preset (`data/presets/`). La matrice v1 du POC est conservée en annexe.
 
+**Ce que la matrice ne décide pas.** Elle produit un plan, rien de plus : aucune chambre n'est réservée
+(INV-1), aucun agent ne saisit quoi que ce soit au nom d'un passager et aucune donnée passager ne part vers un
+agent (INV-5), aucun message n'est envoyé, aucune carte prépayée n'est émise.
+La **validation humaine de la répartition est DANS l'outil** (C6) : écran de validation, journal append-only
+`out/validation-<runId>.json` portant la décision, son horodatage, l'empreinte SHA-256 du plan réellement
+affiché, les lignes écartées avec leur motif, et la PORTÉE de l'identité du validateur (authentifiée par un
+proxy déclaré de confiance / déclarée seulement / absente — le serveur lui-même n'authentifie personne).
+Le journal ne trace ni l'appel aux hôtels ni aucune confirmation : **la confirmation auprès des hôtels et la
+réservation restent hors de l'outil** (INV-1, CDC §2.2).
+
 ## Tiers = cabines
 
 Le tier d'un dossier est sa **cabine** (EX-POL-2) ; le statut Flying Blue ne joue que sur l'ordre de traitement
@@ -18,11 +28,38 @@ Le tier d'un dossier est sa **cabine** (EX-POL-2) ; le statut Flying Blue ne jou
 `max_stars` dépassé n'exclut jamais : l'hôtel est « surclassé » (HORS BAREME si le prix passe le plafond).
 `allow_above_cap_if_no_alternative` : au-dessus du plafond accepté en dernier recours, signalé.
 
+## Escale : libre
+
+L'escale n'est pas une liste figée. Toute escale ayant une fiche `data/stations/<IATA>.json` est acceptée,
+la liste étant relue sur le disque à chaque saisie — un déroutement se produit justement là où on ne l'attend
+pas. Un code sans fiche est refusé avec la liste des fiches présentes et le chemin où déposer la nouvelle.
+Fiches livrées : BKK, CDG, NOU.
+
+## Ce que la recherche filtre, et ce qu'elle ne peut pas filtrer
+
+Avant de juger, il faut trouver. La découverte ouvre une recherche de zone Booking et y ajoute des filtres
+`nflt` dérivés de la politique et de la fiche escale. `rebooking-v2 --dry-run` et `inventaire --dry-run`
+affichent **l'URL exacte de chaque passe** avec ses filtres et leur origine.
+
+| Filtre | Origine | Statut |
+|---|---|---|
+| étoiles | `cabins.*.min_stars` | actif |
+| note voyageurs | `discovery.min_review_score` | actif ; paliers relevés jusqu'à 8/10 seulement — une exigence plus haute filtre au palier 8 (un sur-ensemble, qui n'exclut aucun hôtel conforme) et l'écart est dit |
+| rayon | `discovery.radius_m`, sinon la fiche escale | actif **seulement si** la fiche autorise le filtre de distance (EX-STA-2) ; un rayon saisi mais non envoyé est signalé |
+| prestations exigées | `cabins.*.required_amenities` | actif par `discovery.apply_amenity_filters` ; une prestation sans code de filtre sûr (l'espace de travail) est déclarée **non filtrable** et jugée au relevé |
+| prix par nuit | plafonds effectifs | **opt-in, désactivé par défaut** (`discovery.apply_price_filter = false`) |
+| accessibilité (passe PMR) | `overlays.pmr.require_accessible` | chaîne de filtres construite (socle + accessibilité), mais **la découverte n'envoie aujourd'hui que les passes socle et premium** : l'accessibilité est exigée au jugement du relevé, pas à la recherche. `--dry-run` signale l'écart. |
+
+Le filtre de prix est opt-in parce que la syntaxe `nflt=price=EUR-<min>-<max>-1` est une **hypothèse externe
+non validée** : fausse, elle ne rend pas une erreur mais zéro résultat — indiscernable d'une zone sans offre.
+Chaque passe porte donc son URL **sans** filtre de prix, comme parade. Les codes de filtres ont été relevés le
+2026-09-11 ; la date accompagne le plan de recherche, elle n'est pas revérifiée automatiquement.
+
 ## Surcouches (overlays, cumulables)
 
 | Overlay | Déclencheur | Effet |
 |---|---|---|
-| **PMR** | passager PMR dans le dossier | chambre accessible **requise**, poids distance ×2 au score, surclassement de tier autorisé ; 1 chambre par passager PMR + chambrage normal des accompagnants ; note « transfert adapté à confirmer par l'hôtel » |
+| **PMR** | passager PMR dans le dossier | chambre accessible **requise**, poids distance ×2 au score, surclassement de tier autorisé ; note « transfert adapté à confirmer par l'hôtel ». **Le chambrage PMR n'est PAS déduit** : sans `chambres_demandees`, un PMR est apparié comme un adulte ordinaire (un WCHC et son accompagnante partagent une chambre double). L'ingestion compte et signale les dossiers concernés (`pmr_chambrage_devine`) |
 | **Famille** | enfant (CHD) ou bébé (INF) dans le dossier | chambre familiale (≤ 2 ADT + 2 CHD) ou **2 chambres communicantes dans le même hôtel** ; INF : berceau, ne compte pas dans la capacité |
 
 Ordre de traitement des files : **pmr → famille → J → W → Y** (priorités éditables).
@@ -41,17 +78,81 @@ Score intra-niveau (départage) : note voyageurs 0,35 · adéquation étoiles 0,
 plafond 0,25. Allocation par file : CONFORME d'abord, puis PARTIELLE ; HORS BAREME en dernier recours signalé ;
 sinon **escalade DESK** chiffrée (motif : capacité, conformité ou règlement).
 
-## Mode de règlement (EX-ALL-6, règle H-1 validée le 14/09)
+## Ce que chaque ligne du plan dit de sa propre fiabilité
+
+Une ligne « OK » ne vaut pas garantie : le validateur humain doit voir sur quoi elle repose avant de signer.
+Ces champs sont portés par chaque ligne d'`allocate()` et repris dans les sorties.
+
+| Champ | Valeurs | Ce que le validateur en fait |
+|---|---|---|
+| `stock_mesure` | `true` / `false` / `""` (non logé) | `false` = au moins une chambre repose sur un **affichage plafonné**, une sonde encore plafonnée ou une quantité supposée. À confirmer avec l'hôtel avant de s'engager. |
+| `couchages_insuffisants` / `couchages_manquants` | booléen / nombre de personnes | la chambre allouée ne déclare pas assez de couchages : le statut reste OK, la réserve est à lever avec l'hôtel. |
+| `format_cabine` | `""` / `conforme` / `defaut` | C3 : `defaut` = aucun format de chambre correspondant à la cabine n'était disponible sous le plafond, une chambre standard a été retenue. |
+| `conformite` | CONFORME / PARTIELLE / HORS BAREME | voir le tableau ci-dessus. |
+| `mode_reglement` | voir « Mode de règlement » | avec le motif du choix. |
+| `sous_reserve`, `escalade`, `hors_plan` | texte | ce qui interdit de lire la ligne comme acquise. |
+
+Le récapitulatif de l'allocation porte les mêmes réserves au niveau du run : `summary.complet` est **faux** dès
+qu'une réserve existe (dossier sans chambre, **dossier HORS PLAN HÔTEL**, couchages insuffisants, stock non
+mesuré, avertissement) et tant qu'une personne de la liste reste sans chambre, avec
+la répartition par hôtel et la part du plus gros établissement — ce qu'il faut voir avant de signer.
+`extension.hotel_cap_without_probe` (20) est un **seuil de VIGILANCE, pas un plafond** : au-delà de 20 chambres
+« à confirmer » chez un même hôtel, le volume est signalé au validateur et l'hôtel désigné prioritaire à
+sonder — **aucune chambre n'est retranchée du plan**. Sur le rejeu de référence, 99 chambres tiennent ainsi sur
+un affichage plafonné chez un seul hôtel. La contrepartie réelle est ailleurs, et elle est visible ligne à
+ligne : `stock_mesure`, `chambres_a_confirmer` et `summary.complet = false`.
+Une quantité affichée au-delà de `room_qty_sane_max` (60) est, elle, jugée aberrante, ramenée et signalée.
+
+## Fiches d'enregistrement par passager (C3)
+
+Le format de chambre affecté commande le document remis au passager. Chaque run produit
+`fiches-<run>.csv` (45 colonnes) et `fiches-<run>.html` (imprimable, une fiche par page A4) : **une fiche par
+personne**, y compris les dossiers non logés et les escalades — c'est justement au comptoir qu'ils sont
+traités. Le format de chambre y est écrit en toutes lettres, surcouches d'abord : « PMR + FAMILLE + business
+(J) », « premium éco (W) », etc.
+
+La fiche porte l'identité (si la compagnie l'a transmise — colonnes PAXLIST v2), l'hôtel et sa nuit, le type et
+le format de chambre, les occupants et l'adulte référent, le berceau, l'assistance PMR et le transfert, le mode
+de règlement et le montant à charger sur la carte prépayée, la conformité, le motif d'escalade et une ligne de
+signature. Deux marqueurs, jamais un blanc muet : **« [à remplir] »** (à compléter au comptoir, par l'hôtel ou
+par le passager) et **« [non fourni] »** (la compagnie ne l'a pas transmis). Un champ sans objet disparaît.
+Le nombre de fiches incomplètes est chiffré dès l'ingestion de la liste, avant le run.
+
+## Mode de règlement (EX-ALL-6, règle H-1 validée le 14/09) — carte prépayée comprise
+
+`payment.default_mode` vaut `compagnie` ou **`carte_prepayee`**. La carte prépayée n'est donc pas seulement un
+repli quand l'hôtel refuse le paiement société : elle peut être le **mode nominal** de la compagnie, et le plan
+distingue les deux cas.
 
 `company_payment_possible` (EX-INV-4) : **oui** si hôtel contracté ou prépaiement en ligne ; **non** si
 « paiement sur place uniquement » et non contracté ; sinon **a_confirmer**.
 
-| `company_payment_possible` | Mode de la ligne du plan |
-|---|---|
-| oui | `compagnie` |
-| a_confirmer | `compagnie_a_confirmer` |
-| non, carte prépayée activée | `carte_prepayee` (chargée : nuit + repas + transport, configurable) |
-| non, carte désactivée | **escalade DESK** motif « règlement » |
+| Situation | Mode de la ligne | Motif porté par la ligne |
+|---|---|---|
+| `default_mode = carte_prepayee`, carte activée | `carte_prepayee` | `mode_nominal` |
+| hôtel à prépaiement en ligne ou contracté | `compagnie` | `prepaiement_en_ligne_contracte` |
+| `company_payment_possible = oui` | `compagnie` | `paiement_compagnie` |
+| `company_payment_possible = a_confirmer` | `compagnie_a_confirmer` | — |
+| `non`, carte activée | `carte_prepayee` | `repli_carte` |
+| `non`, carte désactivée | **escalade DESK** « règlement » | `aucun_moyen` |
+
+Une politique incohérente (`default_mode = carte_prepayee` alors que `prepaid_card.enabled = false`) produit un
+avertissement nommé, pas un mode inventé en silence.
+
+### Montant des cartes (C7)
+
+`prepaid_card.per` fixe la granularité : **une carte par dossier** ou **une par personne à loger**. Le montant
+d'une carte = (nuit + repas + transport, selon `load_includes`) ÷ nombre de cartes, plus `marge_eur`, arrondi au
+multiple supérieur `arrondi_eur`. Au-dessus de `plafond_eur`, la ligne escalade en « carte insuffisante ».
+
+Rien n'est estimé : un poste que la politique ne chiffre pas (repas et transport, tant que H-7 n'est pas
+tranchée) laisse le montant **partiel et nommé**, jamais un zéro qui passerait pour un prix. `cout-<run>.json`
+porte la commande à passer à l'émetteur — nombre de cartes, montant total à charger (non nul seulement si
+toutes les cartes complètes partagent une devise), cartes incomplètes, postes non renseignés. **L'outil n'émet
+ni ne charge aucune carte.**
+
+Devises : le coût est ventilé par devise. Si le plan en mélange plusieurs, aucun total consolidé n'est calculé
+(`cost.bloquant`) et les totaux valent `null` — ils ne doivent pas être affichés comme un chiffre.
 
 ## Extension (Étage C, bornes H-2 fixées le 14/09)
 
@@ -61,8 +162,18 @@ Quand un type de chambre est plafonné par l'affichage (« Only X left », borne
    ≤ `probe_no_rooms_max` (30) chambres testées — lecture seule, jamais de réservation ;
 2. sinon **relevé** du candidat suivant de la découverte ;
 3. par **vagues** (taille `auto` = concurrence du plan), jusqu'à couverture des manques ou borne atteinte :
-   `max_sessions_per_run` 18 · `max_cost_usd_per_run` 10 $ · `max_waves` 4 — visibles en permanence dans le bandeau,
-   éditables, annulation de l'extension seule possible (plan conservé, escalade chiffrée).
+   `max_sessions_per_run` 18 · `max_cost_usd_per_run` 10 $ · `max_waves` 4 · **`max_minutes_per_run` 45 min**
+   — visibles en permanence dans le bandeau, éditables, annulation de l'extension seule possible (plan
+   conservé, escalade chiffrée).
+
+Le **budget d'horloge** (C5, « réserver en moins d'une heure ») est une borne de plein exercice, au même rang
+que les vagues, les sessions et le coût. L'échéance du run est calculée une fois et propagée aux relevés : un
+relevé qui ne peut plus démarrer à temps est compté `skipped_budget` — jamais confondu avec un échec d'agent
+dans les compteurs, le rapport et l'escalade. `rebooking-v2 --dry-run` estime la durée du run face à ce budget,
+à partir des deux runs réels mesurés (`docs/recette-demo-v2.md`), et le dit comme une estimation.
+
+Quand l'inventaire est épuisé alors qu'il reste des manques, `rediscover_on_exhaustion` (vrai par défaut) fait
+relancer une découverte élargie au lieu de s'arrêter.
 
 Chaque réallocation réémet les lignes du plan (`plan_row` par PNR) : une chambre provisoire (grisée) devient
 définitive quand le relevé de sa vague confirme prix et type.

@@ -46,7 +46,10 @@ test("offline : A350 plein + fixtures → plan incrémental avec conformite et m
   for (const row of plan.filter((p) => p.statut === "OK")) {
     assert.ok(row.conformite.length > 0, `conformite vide pour ${row.pnr}`);
     assert.ok(["compagnie", "carte_prepayee", "compagnie_a_confirmer"].includes(row.mode_reglement), `mode_reglement invalide : ${row.mode_reglement}`);
-    assert.equal(row.transfert, "taxi, max 45 min");
+    // Libellé issu de la couronne retenue, temps nommé comme DÉCLARÉ (chantier du 21/09/2026).
+    // La fiche BKK des fixtures hors ligne ne porte pas de couronnes déclarées dans ce test :
+    // une couronne unique est dérivée de la fiche escale (45 min, taxi).
+    assert.equal(row.transfert, "taxi, max 45 min déclarées (couronne unique dérivée de la fiche escale)");
   }
   // les trois hôtels exploitables des fixtures couvrent les trois modes de règlement
   const modes = new Set(plan.filter((p) => p.statut === "OK").map((p) => p.mode_reglement));

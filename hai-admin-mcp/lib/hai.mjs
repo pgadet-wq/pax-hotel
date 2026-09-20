@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { HaiAgentsClient, HaiAgentsEnvironment, AnswerValidationError, isTerminalSessionStatus } from "hai-agents";
+import { HaiAgentsClient, HaiAgentsEnvironment, AnswerValidationError, HaiAgentsTimeoutError, isTerminalSessionStatus } from "hai-agents";
 import { translateSessionEvent } from "./events.mjs";
 
 export * from "./hai-urls.mjs";
@@ -153,9 +153,13 @@ export const releveSchema = z.object({
       room_type: z.string(),
       occupancy_adults: z.number().int(),
       occupancy_children: z.number().int().describe("0 si non précisé"),
-      quantity_available: z.number().int().describe("nombre max de chambres sélectionnables affiché"),
+      // les bornes de vraisemblance ne sont PAS posées ici : le schéma est validé par la
+      // plateforme sur la réponse ENTIÈRE, une seule ligne hors borne perdrait tout l'hôtel.
+      // Elles sont dites à l'agent dans le libellé et appliquées ligne à ligne par
+      // filtrerChambresVraisemblables() (C2).
+      quantity_available: z.number().int().describe("nombre max de chambres sélectionnables affiché ; -1 si AUCUNE quantité n'est affichée — jamais d'autre valeur négative, jamais un nombre deviné"),
       cap_reached: z.boolean().describe("true si le sélecteur est plafonné (valeur max atteinte ou liste tronquée)"),
-      price_per_night: z.number().describe("prix par nuit toutes taxes comprises"),
+      price_per_night: z.number().describe("prix par nuit toutes taxes comprises, tel qu'affiché et strictement positif"),
       free_cancellation: z.boolean(),
       breakfast_included: z.boolean(),
       family_capable: z.boolean().describe("libellé familial, quadruple ou communicant"),
@@ -199,13 +203,155 @@ export const inventaireHotelSchema = z.object({
   notes: z.string(),
 });
 
+/* ------------------------------------------------ bornes de vraisemblance */
+/* C2 — un agent peut rapporter n'importe quel nombre : le schéma envoyé à la
+ * plateforme ne peut pas porter ces bornes (une seule ligne hors borne ferait
+ * échouer la réponse ENTIÈRE, donc perdre l'hôtel sans le dire). Les bornes
+ * vivent donc ici, appliquées CHAMBRE PAR CHAMBRE par le convertisseur, qui
+ * rejette la ligne et nomme le rejet. Filet 1 sur 2 : l'allocation borne aussi.
+ *
+ * Partage des rôles entre les deux filets, tel que la politique l'écrit :
+ * - ce que l'allocation ne peut PAS rattraper (prix nul, négatif ou délirant,
+ *   quantité illisible, occupation impossible) est ÉCARTÉ ici ;
+ * - une quantité au-dessus de `policy.extension.room_qty_sane_max` est CONSERVÉE et
+ *   signalée : la politique dit « ramenée à hotel_cap_without_probe avec
+ *   avertissement », et c'est l'allocation qui le fait (`buildStock`). L'écarter ici
+ *   détruirait une capacité réelle — un type de chambre entier — sur la foi d'un seul
+ *   nombre mal lu, et rendrait le second filet inatteignable. */
+
+/** Prix par nuit TTC au-delà duquel une ligne est jugée invraisemblable (EUR). */
+export const PRIX_NUIT_MAX_EUR = 5000;
+
+/** Repli de quantité quand `policy.extension.room_qty_sane_max` n'est pas accessible. */
+export const ROOM_QTY_MAX_DEFAUT = 60;
+
+/** Occupation affichée au-delà de laquelle la ligne n'est plus une chambre d'hôtel. */
+export const OCCUPANCY_MAX = 12;
+
+/**
+ * Schéma de VRAISEMBLANCE d'une ligne de chambre (usage interne, jamais envoyé à
+ * la plateforme). `quantity_available = -1` reste le sentinel « quantité non
+ * affichée » que l'allocation sait traiter (stock supposé, prise à confirmer) :
+ * seules les valeurs < -1 sont rejetées.
+ * @param {{maxQty?: number, maxPrice?: number}} [bornes]
+ * @returns {import("zod").ZodType} schéma à `safeParse` par ligne
+ */
+export function roomSaneSchema({ maxQty = ROOM_QTY_MAX_DEFAUT, maxPrice = PRIX_NUIT_MAX_EUR } = {}) {
+  return z.object({
+    room_type: z.string().min(1),
+    occupancy_adults: z.number().int().min(0).max(OCCUPANCY_MAX),
+    occupancy_children: z.number().int().min(0).max(OCCUPANCY_MAX),
+    quantity_available: z.number().int().min(-1).max(maxQty),
+    price_per_night: z.number().positive().max(maxPrice),
+  });
+}
+
+/** Bornes effectives : politique si elle est fournie, repli documenté sinon. */
+export function bornesChambres({ policy = null, maxQty = null, maxPrice = null } = {}) {
+  const qty = Number.isFinite(maxQty) ? maxQty : policy?.extension?.room_qty_sane_max;
+  return {
+    maxQty: Number.isFinite(qty) && qty > 0 ? qty : ROOM_QTY_MAX_DEFAUT,
+    maxPrice: Number.isFinite(maxPrice) && maxPrice > 0 ? maxPrice : PRIX_NUIT_MAX_EUR,
+  };
+}
+
+/** Motif de rejet en clair — jamais « valeur invalide » : la valeur vue est nommée. */
+function motifRejet(room, { maxQty, maxPrice }) {
+  const p = room?.price_per_night;
+  const q = room?.quantity_available;
+  if (!(typeof p === "number" && Number.isFinite(p))) return `prix illisible (${JSON.stringify(p)})`;
+  if (p <= 0) return `prix ${p} EUR/nuit — un prix nul ou négatif n'est pas un prix relevé`;
+  if (p > maxPrice) return `prix ${p} EUR/nuit au-delà de la borne ${maxPrice}`;
+  if (!(typeof q === "number" && Number.isInteger(q))) return `quantité illisible (${JSON.stringify(q)})`;
+  if (q < -1) return `quantité ${q} — une quantité négative n'existe pas (-1 = non affichée)`;
+  const a = room?.occupancy_adults;
+  const c = room?.occupancy_children;
+  if (!Number.isInteger(a) || a < 0 || a > OCCUPANCY_MAX) return `occupation adultes ${JSON.stringify(a)} hors [0 ; ${OCCUPANCY_MAX}]`;
+  if (!Number.isInteger(c) || c < 0 || c > OCCUPANCY_MAX) return `occupation enfants ${JSON.stringify(c)} hors [0 ; ${OCCUPANCY_MAX}]`;
+  if (!room?.room_type) return "type de chambre vide";
+  // en dernier : une ligne dont c'est le SEUL défaut n'arrive jamais ici (elle est
+  // conservée et signalée), ce motif ne sert donc qu'aux lignes à défauts multiples
+  if (q > maxQty) return `quantité ${q} au-delà de la borne ${maxQty}`;
+  return "ligne non conforme au schéma de vraisemblance";
+}
+
+/**
+ * Filtre de vraisemblance des lignes de chambres d'un relevé (C2).
+ * Pur. Ne corrige RIEN : une ligne hors borne est écartée et nommée, jamais ramenée
+ * à une valeur inventée. Le relevé survit à ses mauvaises lignes ; si l'hôtel entier
+ * disparaît, l'avertissement le dit. Seule exception, voulue par la politique : une
+ * quantité au-dessus de `room_qty_sane_max` reste dans `rooms` et part dans `overCap`
+ * — l'allocation la ramènera au plafond de prudence, elle seule sait le faire sans
+ * inventer de capacité.
+ *
+ * @param {Array<object>} rooms lignes plates du relevé
+ * @param {{policy?: object, maxQty?: number, maxPrice?: number, hotel?: string}} [opts]
+ * @returns {{rooms: Array<object>, rejected: Array<{room_type: string, reason: string, price_per_night: *, quantity_available: *}>, overCap: Array<{room_type: string, quantity_available: number, borne: number}>, warnings: string[], allRejected: boolean, bornes: {maxQty: number, maxPrice: number}}}
+ */
+export function filtrerChambresVraisemblables(rooms, opts = {}) {
+  const bornes = bornesChambres(opts);
+  const schema = roomSaneSchema(bornes);
+  // même schéma, quantité délibérément non bornée : sert à distinguer « ligne dont le
+  // SEUL défaut est une quantité trop grande » d'une ligne réellement inexploitable
+  const schemaHorsQuantite = roomSaneSchema({ ...bornes, maxQty: Number.MAX_SAFE_INTEGER });
+  const hotel = opts.hotel ? `« ${opts.hotel} » : ` : "";
+  const kept = [];
+  const rejected = [];
+  const overCap = [];
+  const warnings = [];
+  for (const r of rooms ?? []) {
+    const objet = r && typeof r === "object";
+    if (objet && schema.safeParse(r).success) {
+      kept.push(r);
+      continue;
+    }
+    const type = String(r?.room_type ?? "(type illisible)");
+    if (objet && schemaHorsQuantite.safeParse(r).success) {
+      // quantité seule en cause : conservée, signalée, plafonnée par l'allocation
+      kept.push(r);
+      overCap.push({ room_type: type, quantity_available: r.quantity_available, borne: bornes.maxQty });
+      warnings.push(
+        `${hotel}chambre « ${type} » : ${r.quantity_available} chambres annoncées pour un seul type, au-delà de la ` +
+          `borne de vraisemblance ${bornes.maxQty} — ligne CONSERVÉE, l'allocation la ramènera au plafond de prudence`,
+      );
+      continue;
+    }
+    const reason = motifRejet(r ?? {}, bornes);
+    rejected.push({ room_type: type, reason, price_per_night: r?.price_per_night ?? null, quantity_available: r?.quantity_available ?? null });
+    warnings.push(`${hotel}chambre « ${type} » écartée — ${reason}`);
+  }
+  const allRejected = rejected.length > 0 && kept.length === 0;
+  if (allRejected) {
+    warnings.push(`${hotel}toutes les chambres relevées (${rejected.length}) sont hors bornes — hôtel sans inventaire exploitable`);
+  }
+  return { rooms: kept, rejected, overCap, warnings, allRejected, bornes };
+}
+
 /* ----------------------------------------------------------- conversions */
 
 const enumToBool = (v) => (v === "oui" ? true : v === "non" ? false : null);
 
-/** Réponse plate de relevé → relevé v2 riche (§5.6), horodaté côté code (EX-REL-2). */
-export function toReleveAnswer(flat, { url = "", checkin = "", checkout = "", candidate = null, observedAt = null } = {}) {
+/**
+ * Réponse plate de relevé → relevé v2 riche (§5.6), horodaté côté code (EX-REL-2).
+ * C2 : les lignes de chambres passent par `filtrerChambresVraisemblables` — prix
+ * strictement positif et borné, quantité entière lisible, occupation plausible. Les
+ * rejets sont ADDITIFS (`rooms_rejected`, `rooms_rejected_all`, `rooms_over_cap`,
+ * `quality_warnings`) : l'appelant les remonte en avertissements nommés, le reste du
+ * relevé est inchangé. Une quantité au-dessus de `room_qty_sane_max` reste dans
+ * `rooms` (l'allocation la plafonne) et se lit dans `rooms_over_cap`.
+ *
+ * @param {object|null} flat réponse plate (releveSchema)
+ * @param {{url?: string, checkin?: string, checkout?: string, candidate?: object|null,
+ *          observedAt?: string|null, policy?: object|null, maxQty?: number|null,
+ *          maxPrice?: number|null}} [opts] `policy` fournit `extension.room_qty_sane_max`
+ * @returns {object|null} relevé v2
+ */
+export function toReleveAnswer(
+  flat,
+  { url = "", checkin = "", checkout = "", candidate = null, observedAt = null, policy = null, maxQty = null, maxPrice = null } = {},
+) {
   if (!flat) return null;
+  const filtre = filtrerChambresVraisemblables(flat.rooms, { policy, maxQty, maxPrice, hotel: flat.hotel });
   return {
     hotel: flat.hotel,
     url: url || candidate?.url || "",
@@ -233,7 +379,16 @@ export function toReleveAnswer(flat, { url = "", checkin = "", checkout = "", ca
       pay_at_property_only: enumToBool(flat.payment_pay_at_property_only),
     },
     observed_at: observedAt ?? new Date().toISOString(),
-    rooms: (flat.rooms ?? []).map((r) => ({ ...r, quantity_displayed_max: r.quantity_available, cap_reached: Boolean(r.cap_reached) })),
+    rooms: filtre.rooms.map((r) => ({ ...r, quantity_displayed_max: r.quantity_available, cap_reached: Boolean(r.cap_reached) })),
+    /** C2 — lignes écartées pour invraisemblance, avec leur motif (additif). */
+    rooms_rejected: filtre.rejected,
+    /** C2 — l'hôtel n'a plus une seule ligne exploitable après filtrage. */
+    rooms_rejected_all: filtre.allRejected,
+    /** C2 — lignes CONSERVÉES dont la quantité dépasse `room_qty_sane_max` : l'allocation
+     * les ramène à `hotel_cap_without_probe` (politique), le rapport doit les montrer. */
+    rooms_over_cap: filtre.overCap,
+    /** C2 — avertissements nommés à remonter tels quels au flux d'événements. */
+    quality_warnings: filtre.warnings,
     notes: flat.notes ?? "",
   };
 }
@@ -394,18 +549,86 @@ export function promptInventaireHotel({ hotelName, hasStartUrl, checkin, checkou
 }
 
 /* ------------------------------------------------------------------ pompe */
+/* C5 — le suivi d'une session ne doit jamais durer plus longtemps que la session
+ * elle-même : le défaut historique (40 min) dépassait à lui seul le budget du run
+ * entier (`policy.extension.max_minutes_per_run`, 45 min), et deux sessions
+ * enchaînées immobilisaient un créneau de 80 minutes. Le défaut est maintenant
+ * adossé au budget SERVEUR de la session (`maxTimeS`), et le résiduel du run,
+ * quand l'appelant le passe, tranche toujours plus court. */
+
+/** Budget serveur supposé d'une session quand l'appelant ne le donne pas (s) — valeur du relevé. */
+export const SESSION_MAX_TIME_S_DEFAUT = 900;
+
+/** Marge d'horloge au-dessus du budget serveur : provisionnement, dernier événement, clôture. */
+export const POMPE_MARGE_MS = 120_000;
+
+/** Plancher de suivi : en dessous, la session est annulée plutôt que suivie. */
+export const POMPE_TIMEOUT_MIN_MS = 15_000;
+
+/** Échéance de suivi atteinte — le SDK a sa classe, le libellé sert de repli. */
+export const estTimeout = (err) =>
+  err instanceof HaiAgentsTimeoutError || /timed?.?out|timeout|délai dépassé/i.test(String(err?.message ?? err ?? ""));
+
+/**
+ * Résiduel d'horloge d'un run, en ms. `deadlineAt` (epoch ms) prime sur
+ * `budgetRemainingMs` : une échéance absolue ne dérive pas d'un travailleur à l'autre.
+ * @returns {number|null} ms restantes, ou null si aucun budget n'est imposé
+ */
+export function budgetRestantMs({ deadlineAt = null, budgetRemainingMs = null } = {}) {
+  if (Number.isFinite(deadlineAt)) return deadlineAt - Date.now();
+  if (Number.isFinite(budgetRemainingMs)) return budgetRemainingMs;
+  return null;
+}
+
+/**
+ * Budget de suivi effectif d'une session : le plus court de ce que l'appelant impose
+ * (`timeoutMs`), du budget serveur de la session (`maxTimeS` + marge) et du résiduel
+ * du run (`budgetRemainingMs` / `deadlineAt`).
+ * @returns {{timeoutMs: number, exhausted: boolean, restantMs: number|null}}
+ */
+export function resolvePumpTimeout({ timeoutMs = null, maxTimeS = null, budgetRemainingMs = null, deadlineAt = null, margeMs = POMPE_MARGE_MS } = {}) {
+  const base =
+    Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? timeoutMs
+      : (Number.isFinite(maxTimeS) && maxTimeS > 0 ? maxTimeS : SESSION_MAX_TIME_S_DEFAUT) * 1000 + margeMs;
+  const restantMs = budgetRestantMs({ deadlineAt, budgetRemainingMs });
+  const ms = restantMs === null ? base : Math.min(base, restantMs);
+  return { timeoutMs: Math.max(POMPE_TIMEOUT_MIN_MS, ms), exhausted: restantMs !== null && restantMs <= POMPE_TIMEOUT_MIN_MS, restantMs };
+}
 
 /**
  * Pompe d'événements d'une session H : diffuse le flux en direct via emit, puis
- * retourne le résultat final. Flux et attente sont séquentiels (même curseur API).
+ * retourne le résultat final. Flux et attente sont séquentiels (même curseur API)
+ * mais partagent une SEULE échéance : le flux ne peut plus consommer le budget une
+ * première fois et l'attente une seconde.
  * Une réponse absente ou non conforme au schéma est un échec de RÉPONSE, pas une
  * exception fatale — l'appelant décide du retry.
  *
  * Annulation RÉELLE (phase 5) : l'abandon du signal appelle `handle.cancel()` —
  * la session s'arrête côté plateforme (facturation comprise), `waitForCompletion`
- * rend alors son statut terminal.
+ * rend alors son statut terminal. Une échéance atteinte annule de la même façon,
+ * puis relaie l'erreur : l'appelant décide du rattachement ou de l'abandon.
+ *
+ * @param {object} handle handle de session du SDK
+ * @param {(type: string, data: object) => void} emit
+ * @param {{timeoutMs?: number|null, signal?: AbortSignal, maxTimeS?: number|null,
+ *          budgetRemainingMs?: number|null, deadlineAt?: number|null, margeMs?: number}} [opts]
  */
-export async function pumpToCompletion(handle, emit, { timeoutMs = 40 * 60 * 1000, signal } = {}) {
+export async function pumpToCompletion(
+  handle,
+  emit,
+  { timeoutMs = null, signal, maxTimeS = null, budgetRemainingMs = null, deadlineAt = null, margeMs = POMPE_MARGE_MS } = {},
+) {
+  const budget = resolvePumpTimeout({ timeoutMs, maxTimeS, budgetRemainingMs, deadlineAt, margeMs });
+  if (budget.exhausted) {
+    emit("warning", {
+      message:
+        `budget d'horloge du run épuisé (${Math.round((budget.restantMs ?? 0) / 1000)} s restantes) — suivi limité à ` +
+        `${Math.round(budget.timeoutMs / 1000)} s, la session est annulée si elle n'a pas répondu d'ici là`,
+    });
+  }
+  const echeance = Date.now() + budget.timeoutMs;
+  const restant = () => Math.max(5000, echeance - Date.now());
   const onAbort = () => {
     Promise.resolve(handle.cancel()).catch(() => {});
   };
@@ -413,7 +636,7 @@ export async function pumpToCompletion(handle, emit, { timeoutMs = 40 * 60 * 100
   else signal?.addEventListener("abort", onAbort, { once: true });
   try {
     try {
-      for await (const ev of handle.stream({ until: "settled", timeoutMs })) {
+      for await (const ev of handle.stream({ until: "settled", timeoutMs: budget.timeoutMs })) {
         if (signal?.aborted) break;
         for (const e of translateSessionEvent(ev)) emit(e.type, e.data);
       }
@@ -422,7 +645,7 @@ export async function pumpToCompletion(handle, emit, { timeoutMs = 40 * 60 * 100
       emit("warning", { message: `flux d'événements interrompu (${err?.message ?? err}) — attente du résultat` });
     }
     try {
-      const result = await handle.waitForCompletion({ timeoutMs });
+      const result = await handle.waitForCompletion({ timeoutMs: restant() });
       // la session peut rester idle après sa réponse (timeout d'inactivité par défaut) :
       // on la ferme pour libérer le slot de concurrence, sans conséquence sur le résultat
       if (!isTerminalSessionStatus(result.status)) handle.cancel().catch(() => {});
@@ -431,6 +654,22 @@ export async function pumpToCompletion(handle, emit, { timeoutMs = 40 * 60 * 100
       if (err instanceof AnswerValidationError) {
         emit("warning", { message: "réponse finale absente ou non conforme au schéma" });
         return { id: handle.id, status: "completed", answer: null, outcome: null, error: "réponse non conforme au schéma", events: [] };
+      }
+      // Échéance atteinte. Deux cas, et un seul justifie d'annuler :
+      // - le budget du run est épuisé : personne ne reviendra chercher cette session,
+      //   elle continuerait de courir et de facturer — on l'annule (C5) ;
+      // - il reste du budget : l'appelant a un rattachement §6.6 à jouer sur cette
+      //   session, l'annuler ici lui ferait perdre une réponse peut-être déjà écrite.
+      //   Le budget SERVEUR (`maxTimeS`) la ferme de toute façon côté plateforme.
+      if (estTimeout(err)) {
+        const restantMs = budgetRestantMs({ deadlineAt, budgetRemainingMs });
+        const plusDeBudget = restantMs !== null && restantMs <= POMPE_TIMEOUT_MIN_MS;
+        emit("warning", {
+          message:
+            `échéance de suivi atteinte (${Math.round(budget.timeoutMs / 1000)} s) — session ${handle.id} ` +
+            (plusDeBudget ? "annulée, budget du run épuisé" : "laissée vivante pour rattachement (§6.6)"),
+        });
+        if (plusDeBudget) Promise.resolve(handle.cancel()).catch(() => {});
       }
       throw err;
     }

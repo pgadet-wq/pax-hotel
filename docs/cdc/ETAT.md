@@ -4,9 +4,9 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 
 ## Phase courante
 
-- Phase : 7 — Déploiement Scaleway (phases 5 et 6 terminées le 15/09)
-- Statut : non démarrée
-- Dernier commit : `feat(phase-5): fixtures réelles et captures réelles de simulation` (complément de clôture phase 5, poussé sur `origin/main` ; le tag `demo-v2-recette` reste sur le commit de recette)
+- Phase : hors phases — **chantier C1-C7 (conditions client)**, 21/09/2026. Phases 0 à 7 terminées.
+- Statut : phase 7 **CLOSE le 16/09** (déploiement Scaleway `fr-par` 51.158.96.47 + run réel `mu3lnxm4` : 25 min, 17 sessions, ~2,5 $, 118 logés / 39 escalades — voir `docs/recette-demo-v2.md` §4 et §5). Ne PAS la rejouer.
+- Dernier commit : `f0b5557 fix(sonde): la mesure de capacité plafonne le total de l'hôtel au lieu de s'y ajouter`. Arbre de travail non commité : chantier C1-C7 puis traitement de la relecture adverse.
 
 ## Fait
 
@@ -49,6 +49,36 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
     - **Dépassement de plafond affiché sur la chambre ALLOUÉE** et non sur la moins chère de l'hôtel : 6 700 €/nuit d'écart étaient masqués. Sur la vraie liste : 61 lignes hors barème, 10 581 €/nuit annoncés.
     - **Rejeu** : refuse désormais de comparer deux listes différentes (empreinte non nominative `pax-<runId>.json` écrite à côté des relevés) — il répondait « 157 logés / 0 escalade » sur une liste fictive là où la vraie donnait 176/62. **Health** lit la clé par `readApiKey()` (donc aussi `~/.config/hai/.env`) : il annonçait « clé absente » sur une installation qui marche.
     - Reste ouvert (mineur, mesuré) : la monotonie du plafond n'est pas totale sur les relevés de référence (105 → 103 entre 140 et 150 €), parce que le plafond change aussi le classement des hôtels (`headroom` dans le score). À traiter en sortant `headroom` de la clé de tri.
+
+- 21/09 (hors phase) — **chantier C1-C7 (7 conditions client), puis traitement de la relecture adverse**.
+  - **C1** recherche pilotée par la saisie · **C2** chambres pour la TOTALITÉ des passagers · **C3** fiches de saisie par passager selon le format de chambre · **C4** remplacer une équipe d'escale · **C5** réserver en moins d'une heure (budget d'horloge du run) · **C6** répartition validée par un humain · **C7** règlement par cartes prépayées.
+  - Modules créés : `lib/fiches.mjs` (C3). Routes : `POST` / `GET /api/validation` (C6), `POST /api/retention-purge`. Livrables portés de 7 à **9** : `fiches-<run>.csv` et `fiches-<run>.html` (une fiche par personne, imprimable A4).
+  - Tests ajoutés : `conditions-c1-c2`, `conditions-c3`, `conditions-c5-c7`, `conditions-c6`, `creneaux-presentation`, puis `chiffres-merites` et `allocate-monotonie` (relecture adverse).
+  - **Relecture adverse traitée le 21/09** — corrections, toutes sur le même fil rouge « aucun chiffre rassurant qui ne soit mérité » :
+    - **Message passager** : la variante se choisit sur la certitude de la LIGNE (`stock_mesure`, `chambres_a_confirmer`, `couchages_insuffisants`), plus sur le drapeau de RUN `provisoire`, faux pour toutes les lignes en fin de run. 179 personnes recevaient « une chambre vous est attribuée, la réservation est en cours de confirmation avec l'hôtel » pour un stock jamais mesuré, chez un hôtel que personne n'avait appelé. La phrase « réservation en cours de confirmation » est retirée des gabarits FR et EN : elle décrivait un échange qui n'a pas eu lieu (INV-1). Mesure : 0 message affirmatif sur le rejeu, 79 dossiers en variante « provisoire ».
+    - **`summary.complet`** exige désormais que PERSONNE ne reste sans chambre, hors plan hôtel compris, et une réserve nommée sort pour les dossiers hors plan. Un plan dont tous les non-logés étaient hors plan (civière, médical, mineur seul) se déclarait « complet » et l'écran C6 écrivait « tous les dossiers sont logés ».
+    - **Coût agents non rapporté** : `events.mjs` propage `null` au lieu de `0` (`totalCost`, `steps` et `costPerModel` sont optionnels sur le flux). Le `null` traverse relevés, sondes, découverte, pipeline, bandeau et rapport (« non mesuré ») ; l'extension **s'arrête** sur « coût NON MESURÉ — budget non contrôlable » au lieu de courir sans frein sous `max_cost_usd_per_run`.
+    - **Coût du plan** : `per_night` reste `null` quand AUCUN prix n'est lisible, au lieu de « 0 EUR ». Le coût agents du rejeu hors ligne est libellé en dollars, comme la borne.
+    - **Colonnes C7** : `{ cost }` est passé à `buildPlanCsv` et `buildRoomingCsv` — les quatre colonnes de carte prépayée étaient vides sur 100 % des lignes ; `carte_incomplet=oui` sort désormais sur les 15 cartes incomplètes du rejeu, et la liste d'appel porte enfin adresse et téléphone quand le relevé les donne.
+    - **Créneaux de convocation** : l'occupation RÉELLE par créneau est calculée et imprimée (min, max, série). « 32 dossiers par créneau » était une capacité, pas une répartition : 8 × 32 = 256 pour 157 dossiers convoqués.
+    - **Concentration par hôtel (UI)** : « 0 ferme(s) / 0 À CONFIRMER » remplacé par « ventilation indéterminée » quand le résumé ne porte pas les compteurs — la cellule voisine le disait déjà, celle-ci la contredisait.
+    - **Bandeau de run** : coût, tokens et pas démarrent à « — » et non à « 0,00 $ / 0 / 0 ».
+    - **Fiche d'inventaire** : `capacity_hint.rooms_displayed_max` (maximum PAR TYPE) ne borne plus le total d'un hôtel. La branche était morte en production ; alimentée, elle aurait divisé le plan par deux sur l'inventaire BKK réel en présentant l'écart comme une « capacité MESURÉE ».
+    - **Rétention RGPD** : les trois purges (démarrage du serveur, fin de run, bouton manuel) obéissent à la politique du DERNIER RUN LANCÉ, plus à `DEFAULT_POLICY` ; le seuil ET sa provenance sont écrits dans `out/retention.log` et dans le bilan ; un `statSync` en échec est compté et nommé au lieu de disparaître des deux compteurs ; un journal non écrit lève un avertissement au lieu d'être avalé ; un journal de validation présent mais illisible fait échouer l'écriture (500) au lieu de repartir à `seq = 1` ; `NOMINATIF_RE` ne porte plus l'entrée morte du rapport.
+    - **Alias d'en-tête** : `class` et `cos` étaient annoncés au dictionnaire comme alias de `classe_reservation` alors qu'ils sont alias de `cabine` — un export DCS qui suivait le dictionnaire à la lettre était refusé en bloc, zéro ligne ingérée. Le dictionnaire est corrigé, la collision d'alias est interdite à l'import, le message d'erreur nomme le remède, et `classe_reservation` est désormais réellement conservée comme trace d'audit.
+    - **Jeu de fichiers remis à la compagnie** : modèle, exemple et dictionnaire portent les mêmes 26 colonnes, verrouillé par test.
+  - **Restent OUVERTS, arbitrage à rendre** : « 1 chambre par passager PMR » (non implémentée ; les documents sont alignés sur le code et l'ingestion émet `pmr_chambrage_devine`) · déduction du transit depuis `destination_finale` (colonne collectée, validée, sans consommateur ; documents alignés) · écran de correspondance RBD vers cabine · sort du `rapport-<run>.md`, classé nominatif mais volontairement NON purgé · `couvrirCouchages` (levier C2 écrit et testé qu'aucun appelant n'active) · protection du run courant à la purge par sous-chaîne plutôt que par égalité (sous-suppression, jamais suppression de trop) · **monotonie du levier « plafond »** : la mesure la dément (87 puis 83 dossiers logés quand le plafond Y monte de 50 à 70 EUR, à nombre de chambres constant), le commentaire qui l'affirmait est retiré et un test de caractérisation fige la mesure (`test/allocate-monotonie.test.mjs`).
+
+- 21/09 (hors phase, second chantier de la journée) — **politique de prise en charge et couronnes de distance**.
+  - **Question posée par l'utilisateur** : le vivier proche ne couvre pas 324 passagers — peut-on élargir la distance et répartir les hôtels selon la priorité des passagers (correspondance et son horaire, famille avec bébé, etc.), réglée par des cases à cocher ?
+  - **Trois constats préalables** : `fileOf()` était FIGÉ (`pmr → famille → cabine`) et le champ « priorités » de l'UI était un texte libre **sans effet** — tout autre mot était ignoré en silence ; la distance n'entrait que dans un score de tri, **jamais dans l'affectation** ; et la donnée n'existait pas (ni vol de correspondance, ni horaire).
+  - **Décision d'architecture (validée par l'utilisateur)** : l'horaire du vol suivant sert de DEUX façons, et c'est la seconde qui protège. Le **rang** décide de l'ordre de service ; le **budget de trajet** `dossier.trajet_max_min` est une **CONTRAINTE DURE** qu'aucun rang n'outrepasse. Un rang seul ne protège personne : si les PMR sont servis d'abord et épuisent le vivier proche, le passager qui repart à 05h40 finit à 40 km. Formule : `(fenêtre − avance_avant_vol − marge − repos_minimal) / 2` (aller ET retour) ; budget ≤ 0 → escalade « correspondance trop serrée » (repos côté piste) ; **pas d'horaire = aucune contrainte, jamais de budget inventé**. Le dossier porte une `explication` en toutes lettres, pour qu'un agent d'escale puisse contester le calcul.
+  - **Les temps de trajet des couronnes sont DÉCLARÉS dans la fiche escale, jamais mesurés** (décision validée) : l'outil n'a aucun service de routage et **ne convertit pas une distance en durée**. Étiquetés « déclarés, non mesurés » partout où ils s'affichent. `station.search.couronnes[]` + helper `couronnesDe(station)` qui distingue `declaree` de `derivee`. BKK 5/15/40 km · CDG 5/15/40 km · NOU 15/45/60 km.
+  - **Livré** : `policy.global.prise_en_charge` — **13 critères cochables** (`CRITERE_KEYS`), chacun avec `rang`, `proximite` (stricte/préférée/aucune) et `departage` ; `policy.global.correspondance` (avance 120 min, repos minimal 240, marge 30, seuil « serrée » 480) ; **PAXLIST v3** (28 colonnes : `vol_correspondance`, `heure_correspondance`, règle de datage d'un `HH:MM` seul tranchée et avertie, fuseau jamais converti en silence) ; contrainte de couronne appliquée à l'allocation avec traçabilité (`couronne`, `couronne_source`, `couronne_trajet_min_declare`, `trajet_max_min` au plan) ; recherche **par couronne**, ouverte seulement si elle sert ; restitution par couronne au rapport, aux fiches (heure limite de retour à l'aéroport) et à l'écran de validation ; l'UI remplace le champ texte par les cases à cocher et explique rang contre proximité.
+  - **Correctifs de fond de la recette** : `Date.parse` n'est plus appelé que sur une forme vérifiée (« 9999 » rendait un budget de 2 096 506 840 min sans avertissement, donc un dossier réputé libre d'aller à 40 km) ; une fenêtre aberrante est bornée à 72 h là où le budget se calcule ; le message passager porte enfin l'heure limite de retour que la fiche imprimait déjà. **Câblés après coup** : `couronne` entre au `HotelEntrySchema` (zod la retirait à l'écriture, le marquage ne survivait pas au run) et `contexteEscale()` est passé à `ingestPassagers` par la CLI **et** par le serveur (sans lui, les contrôles de plausibilité ne tournaient jamais).
+  - `npm test` : **302 verts / 13 suites** (dont 24 cas neufs), y compris le test qui protège tout le dispositif : *un dossier à budget court servi EN DERNIER obtient quand même la couronne 1, ou sort en escalade « temps de trajet » — jamais un hôtel hors budget.*
+  - **La réponse honnête, que le dry-run imprime seul** : élargir la distance **ne suffit pas** à BKK. Les trois couronnes ouvertes, le vivier reste à **85 chambres indicatives pour 173 demandées**. La politique décide QUI va loin et qui n'en a pas le droit ; elle ne fabrique pas les chambres manquantes. Et le premier chiffre affiché est **pessimiste** : 11 des 12 candidats n'ont aucune distance mesurée et sont rattachés à la couronne la plus lointaine PAR PRUDENCE — la réponse est de relever les distances, pas de toucher au code.
+  - **Restent ouverts sur ce lot** : datage d'un `HH:MM` seul plafonné à +24 h (erreur dans le sens prudent, annoncée) · le dry-run des deux CLI affiche les passes ordinaires et non les passes par couronne (sous-estime, ne rassure pas) · `tools/rebooking-v2.mjs:741` (chemin payant `--probe-releve`) appelle `buildDossiers` sans horloge d'escale, sans conséquence sur le plan.
 
 ## Décisions prises
 
@@ -93,7 +123,8 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 
 ## Points bloquants
 
-- Aucun. Critère ouvert (non bloquant) : mesures du run complet réel absentes de `docs/recette-demo-v2.md` (run non joué en phase 6, décision utilisateur) — à couvrir en phase 7.
+- **L'inventaire BKK ne peut pas couvrir 324 passagers.** Mesure du 21/09 (`--dry-run`) : **85 chambres indicatives pour 173 demandées**, 12 candidats au vivier. Le run sort « épuisé » et escalade. Contournements : `tools/inventaire.mjs --station BKK --refresh --max 20` (payant, INV-8), ou « Forcer la découverte ». Rien ne corrige cela côté code : c'est un manque de vivier, pas un défaut du moteur.
+- Conséquence directe : **aucun chiffre de démonstration « sans escalade » n'est atteignable** sur l'inventaire actuel. Toute communication qui annonce « tous les passagers logés » est fausse.
 
 ## Valeurs lues sur le compte H (14-15/09)
 
@@ -101,12 +132,18 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 
 ## Vérification
 
-- `npm test` : OK (161 cas, 15/09 — les 159 de la recette + 2 tests des fixtures réelles)
-- `rebooking-v2 --offline` : OK (15/09, 88 OK + 69 escalades, 0 €) · `tools/inventaire.mjs --refresh` réel : OK (15/09, 9 hôtels BKK)
-- Recette UI simulation (15/09, navigateur) : complète — voir `docs/recette-demo-v2.md` §2
-- Run complet réel : NON JOUÉ (phase 7)
+**Mesuré le 21/09/2026**, chemins GRATUITS uniquement — aucune session d'agent, aucun run réel (INV-8) :
+
+- `npm test` : **278 cas, 0 échec** (13 fichiers de suites)
+- `rebooking-v2 --offline data/simulate/releves-demo.json` : **90 dossiers logés / 67 en escalade**, 128 chambres dont **29 FERMES et 99 À CONFIRMER**, 16 dossiers logés sans couchage suffisant, 15 cartes prépayées incomplètes, **8 fichiers écrits** (la découverte est sautée hors ligne), 0 session, 0,00 $
+- `rebooking-v2 --dry-run` : couverture **85 chambres indicatives pour 173 demandées** — 315 personnes à coucher (hors 9 nourrissons, 324 à bord), 157 dossiers, 12 candidats. **Couverture INSUFFISANTE, dite comme telle.**
+- Simulation complète (`createRunManager` + `createSimulation`, serveur sans `DEMO_ALLOW_PAID`) : **122 logés / 35 escalades**, coût **26 569 €/nuit** (J 5 405 + W 1 552 + Y 19 612), borne haute **32 900 €**, **9 livrables**, `summary.complet = false` avec 4 réserves nommées
+- `git diff --stat -- data/inventaire/` : **vide** (fichier versionné non touché)
+- Recette UI simulation (15/09, navigateur) : `docs/recette-demo-v2.md` §2 — **chiffres périmés**, encadré ajouté en tête
+- Run complet réel : **JOUÉ le 16/09** (`mu3lnxm4`, recette §4)
 
 ## Prochaine phase
 
-- Phase suivante : 7 — Déploiement Scaleway (CDC §17) + répétition générale : un run simulé + le run réel distant (mesures à archiver dans `docs/recette-demo-v2.md` §4)
-- Fiche : `docs/cdc/phases/phase-7-deploiement-scaleway.md`
+- **Les phases 0 à 7 du CDC sont terminées** (phase 7 close le 16/09). Il n'y a plus de fiche de phase à ouvrir.
+- Travaux suivants, par ordre de valeur : (1) **élargir le vivier BKK** — seul point bloquant ; (2) rendre le tri de `rankedFor()` indépendant du plafond, pour que le levier de séance soit sûr ; (3) arbitrer « 1 chambre par PMR » et le sort du rapport nominatif ; (4) écran de correspondance RBD vers cabine.
+- Avant toute clôture : `git fetch`, relire ce fichier, compléter sans écraser (plusieurs conversations commitent dans ce dépôt).

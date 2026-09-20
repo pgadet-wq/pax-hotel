@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createRunManager, HttpError } from "../../demo/run-manager.mjs";
+import { createRunManager, HttpError, stateFileName } from "../../demo/run-manager.mjs";
 import { createSimulation, loadSimInventaire } from "../../demo/simulate.mjs";
 import { loadStation } from "../lib/stations.mjs";
 import { mergeConfig } from "../lib/scenario.mjs";
@@ -74,9 +74,15 @@ test("run simulé via le manager : snapshot complet, sorties §8, captures priv�
   assert.ok(snap.metricsTotals.steps > 0);
   assert.equal(snap.metricsTotals.cost_usd, 0);
 
-  // sorties §8 : 7 fichiers écrits et référencés (dont la liste d'appel par hôtel)
-  assert.equal(snap.outputs.length, 7);
+  // sorties §8 : 9 fichiers écrits et référencés. 7 d'origine (plan, rapport, messages,
+  // rooming, coût, candidats, relevés) + les 2 fiches d'enregistrement par passager (C3,
+  // fiches-<runId>.csv et .html), 8e et 9e livrables. L'état incrémental
+  // run-<runId>.state.json est écrit dans le même dossier mais n'est pas un livrable.
+  assert.equal(snap.outputs.length, 9);
   assert.ok(snap.outputs.some((f) => f.startsWith("rooming-")), "liste d'appel par hôtel produite");
+  assert.ok(snap.outputs.includes(`fiches-${runId}.csv`), "fiches d'enregistrement CSV (C3)");
+  assert.ok(snap.outputs.includes(`fiches-${runId}.html`), "fiches d'enregistrement HTML (C3)");
+  assert.ok(!manager.isOutputAllowed(stateFileName(runId)), "état incrémental non téléchargeable (nominatif)");
   for (const name of snap.outputs) {
     assert.ok(fs.existsSync(path.join(outDir, name)), `${name} écrit`);
     assert.ok(manager.isOutputAllowed(name));
@@ -115,7 +121,7 @@ test("INV-10 : deuxième run refusé à 409 pendant un run", async () => {
   await manager.wait();
 });
 
-test("annulation totale : état cancelled, aucune sortie écrite", async () => {
+test("annulation totale : état cancelled, aucun livrable écrit (hors état incrémental)", async () => {
   const outDir = tmpOut();
   let manager;
   const hub = recordingHub((type, ev) => {
@@ -127,7 +133,13 @@ test("annulation totale : état cancelled, aucune sortie écrite", async () => {
   const snap = manager.snapshot();
   assert.equal(snap.state, "cancelled");
   assert.deepEqual(snap.outputs, []);
-  assert.equal(fs.readdirSync(outDir).length, 0);
+  // Le dossier n'est plus vide depuis la persistance de run : l'état incrémental
+  // run-<runId>.state.json y est écrit en continu (reprise après coupure). Ce n'est pas
+  // un livrable — il n'est ni référencé dans `outputs` ni téléchargeable. La garantie
+  // testée reste donc la même qu'avant : l'annulation n'écrit AUCUN livrable §8.
+  const restes = fs.readdirSync(outDir);
+  assert.deepEqual(restes, [stateFileName(snap.runId)]);
+  assert.ok(!manager.isOutputAllowed(stateFileName(snap.runId)));
   assert.equal(snap.done.cancelled, true);
 });
 

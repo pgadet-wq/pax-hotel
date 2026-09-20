@@ -1,19 +1,13 @@
 #!/usr/bin/env node
 /**
- * Étage 0 — inventaire hôtelier par escale (CDC §6.1), partie HORS LIGNE (phase 2).
+ * Étage 0 — inventaire hôtelier par escale (CDC §6.1) : le vivier d'hôtels dans
+ * lequel un run puisera ensuite. Voir `--help`.
  *
+ *   node hai-admin-mcp/tools/inventaire.mjs --help
  *   node hai-admin-mcp/tools/inventaire.mjs --station BKK --dry-run
- *   node hai-admin-mcp/tools/inventaire.mjs --station BKK --preflight   # contrôle HTTP des fiches, 0 €
- *   node hai-admin-mcp/tools/inventaire.mjs --station BKK --offline data/simulate/inventaire-demo.json
+ *   node hai-admin-mcp/tools/inventaire.mjs --station BKK --preflight
  *
- *   --station <code>    escale (défaut BKK)
- *   --checkin <date>    dates de référence (défaut : J+14, H-4)
- *   --nights <n>        nuits de référence (défaut 1)
- *   --dry-run           affiche zone, nflt et URL de recherche ; n'écrit rien (EX-INV-6)
- *   --offline <json>    fusionne un inventaire de fixtures dans data/inventaire/{code}.json
- *   --refresh, --max    Étage 0 par agents : câblés en phase 3 (payant) — refusés ici
- *
- * Aucun import de hai-agents, aucun agent, aucun réseau.
+ * Aucune réservation, jamais (INV-1) : cet outil relève et classe, il n'engage rien.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -21,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { preflightUrls, resumePreflight } from "../lib/preflight.mjs";
 import { loadStation } from "../lib/stations.mjs";
 import { loadInventaire, mergeInventaire, normalizeInventaire, isStale, slugify, reconcileIds, INVENTAIRE_DIR } from "../lib/inventaire.mjs";
-import { buildNflt, buildSearchUrl, buildHotelUrl } from "../lib/hai-urls.mjs";
+import { buildSearchPlan, buildHotelUrl } from "../lib/hai-urls.mjs";
 import { DEFAULT_POLICY } from "../lib/policy.mjs";
 import { newRunId } from "../lib/scenario.mjs";
 import { mkEmitter } from "../lib/events.mjs";
@@ -34,6 +28,37 @@ const opt = (name, dflt) => {
 };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+const AIDE = `Inventaire hôtelier d'une escale (Étage 0, CDC §6.1).
+
+Usage : node hai-admin-mcp/tools/inventaire.mjs --station <IATA> <mode> [options]
+
+Modes GRATUITS (aucun agent, 0 €)
+  --dry-run     zone, filtres, URL de recherche réellement envoyée, inventaire en place.
+                N'écrit rien.
+  --preflight   contrôle HTTP des fiches Booking de l'inventaire, avant d'y dépenser des
+                sessions. Verdicts FERMES : 404/410 et redirection vers un autre
+                établissement. Tout le reste (403, 429, 202, 3xx, délai dépassé, réponse
+                trop courte) est INDÉTERMINÉ et la fiche reste candidate.
+  --offline <fixtures.json>  fusionne un inventaire de fixtures dans data/inventaire/
+
+Options
+  --station <IATA>     escale (défaut BKK) — fiches dans data/stations/
+  --checkin AAAA-MM-JJ dates de référence (défaut : J+14)
+  --nights <n>         nuits de référence (1 à 7, défaut 1)
+  --timeout <ms>       délai du pré-vol par fiche (défaut 10000)
+  --help               ce texte
+
+Mode PAYANT (INV-8) — exige DEMO_ALLOW_PAID=1
+  --refresh [--max n]  découverte + un relevé court par candidat (n de 1 à 15, défaut 10),
+                       fusion sans doublon dans data/inventaire/<IATA>.json
+
+Codes de sortie du pré-vol : 0 rien à écarter · 3 au moins une fiche morte ou redirigée.`;
+
+if (flag("help") || argv.includes("-h")) {
+  console.log(AIDE);
+  process.exit(0);
+}
 
 // Étage 0 par agents (--refresh, --max) : PAYANT — garde INV-8, réservé aux phases 5-6.
 const wantsRefresh = flag("refresh") || opt("max", null) !== null;
@@ -73,7 +98,11 @@ if (flag("preflight")) {
     console.log(`Inventaire ${station.code} : aucune URL à vérifier.`);
     process.exit(0);
   }
-  console.log(`Pré-vol ${station.code} : ${tout.length} fiche(s) — aucun agent, 0 €\n`);
+  console.log(`Pré-vol ${station.code} : ${tout.length} fiche(s) — aucun agent, 0 €`);
+  console.log("Verdicts FERMES : MORTE (404/410) et REDIR (la page servie est un AUTRE établissement).");
+  console.log("Tout le reste — 403, 429, 202, 3xx, délai dépassé, page trop courte — est INDÉTERMINÉ (« ? ») :");
+  console.log("la fiche reste candidate. Depuis un réseau qui intercepte les requêtes, tout revient indéterminé.");
+  console.log("");
   const res = await preflightUrls(tout, { timeoutMs: Number(opt("timeout", "10000")), concurrency: 6 });
   for (const r of res) {
     const marque = { vivante: "OK  ", morte: "MORTE", redirigee: "REDIR", indeterminee: "?   " }[r.verdict];
@@ -96,7 +125,10 @@ if (flag("preflight")) {
 /* ------------------------------------------------------------------ dry-run */
 
 if (flag("dry-run")) {
-  const nflt = buildNflt(policy, station);
+  // La découverte de l'Étage 0 envoie `buildNflt(policy, station)` : ni restriction
+  // aux cabines à loger (l'inventaire est un vivier, pas un run), ni passe PMR.
+  // Le plan affiché est donc celui de ce réglage, et rien d'autre.
+  const planRecherche = buildSearchPlan({ policy, station, checkin: CHECKIN, checkout: CHECKOUT, needs: null, pmr: false });
   console.log(`Escale ${station.code} — ${station.name} (${station.search.zone_query})`);
   console.log(`  zone : « ${station.search.zone_query} » · rayon ${station.search.radius_km} km (réf. ${station.search.distance_ref})` +
     ` · filtre distance : ${station.search.use_distance_filter ? "oui" : "non (EX-STA-2)"}`);
@@ -105,16 +137,35 @@ if (flag("dry-run")) {
   console.log(`  inventaire : ${existing ? `${existing.hotels.length} hôtel(s), mis à jour le ${existing.updated_at ?? "jamais"}` : "absent"}` +
     ` · périmé : ${isStale(existing, policy) ? "oui" : "non"}`);
   console.log("");
-  console.log(`nflt socle   : ${nflt.socle}`);
-  console.log(`nflt premium : ${nflt.premium}`);
+  console.log(`Recherche envoyée — ${planRecherche.passes.length} passe(s) :`);
+  for (const passe of planRecherche.passes) {
+    console.log(`\n  [${passe.id}] ${passe.libelle}`);
+    console.log(`    filtres : ${passe.filtres.map((f) => `${f.libelle} (${f.origine})`).join(" · ") || "aucun"}`);
+    console.log(`    nflt : ${passe.nflt}`);
+    console.log(`    URL : ${passe.url}`);
+    if (passe.url_sans_filtre_prix) console.log(`    repli sans filtre de prix : ${passe.url_sans_filtre_prix}`);
+  }
+  const prixFiltre = planRecherche.passes.some((passe) => passe.filtres.some((f) => f.origine === "prix"));
   console.log("");
-  console.log(`URL passe socle   : ${buildSearchUrl({ station, checkin: CHECKIN, checkout: CHECKOUT, nflt: nflt.socle })}`);
-  console.log(`URL passe premium : ${buildSearchUrl({ station, checkin: CHECKIN, checkout: CHECKOUT, nflt: nflt.premium })}`);
+  console.log(`  rayon : ${planRecherche.rayon.metres ?? "non exploitable"}${planRecherche.rayon.metres ? " m" : ""} (${planRecherche.rayon.source}) — ${planRecherche.rayon.applique ? "envoyé à Booking" : "PAS envoyé à Booking"}`);
+  console.log(`  filtre de prix : ${prixFiltre ? "ACTIF" : "INACTIF (discovery.apply_price_filter = false — opt-in, syntaxe non validée)"}` +
+    ` · plafonds retenus : socle ${planRecherche.plafonds_eur.socle} EUR/nuit, premium ${planRecherche.plafonds_eur.premium} EUR/nuit`);
+  console.log(`  codes de filtres relevés le ${planRecherche.codes_releves_le}, non revérifiés depuis`);
+  if (planRecherche.non_filtrables.length) {
+    console.log("  exigences NON filtrables — elles ne seront jugées qu'au relevé :");
+    for (const nf of planRecherche.non_filtrables) console.log(`    - ${nf.prestation} (cabine ${nf.cabine}) : ${nf.raison}`);
+  }
+  for (const a of planRecherche.avertissements) console.log(`  ⚠ ${a}`);
+  for (const h of planRecherche.hypotheses) {
+    console.log(`  hypothèse « ${h.id} » (${h.syntaxe}) — ${h.statut}, relevée le ${h.releve_le} · parade : ${h.parade}`);
+  }
   if (station.fallback_hotels.length) {
     console.log("");
     console.log("Hôtels de repli (fiche escale) :");
     for (const f of station.fallback_hotels) console.log(`  - ${f.name} : ${buildHotelUrl(f.url, { checkin: CHECKIN, checkout: CHECKOUT })}`);
   }
+  console.log(`\nContrôle HTTP des fiches ci-dessus, gratuit et sans agent :`);
+  console.log(`  node hai-admin-mcp/tools/inventaire.mjs --station ${station.code} --preflight`);
   console.log("\nDry-run : aucune écriture, aucun agent.");
   process.exit(0);
 }
@@ -147,7 +198,8 @@ if (offline) {
 /* --------------------------------------- Étage 0 par agents (EX-INV-5, payant) */
 
 if (!wantsRefresh) {
-  console.error("préciser un mode : --dry-run, --offline <fixtures.json>, ou --refresh [--max n] (payant, DEMO_ALLOW_PAID=1).");
+  console.error("préciser un mode : --dry-run, --preflight, --offline <fixtures.json>,");
+  console.error("ou --refresh [--max n] (payant, DEMO_ALLOW_PAID=1). Détail : --help.");
   process.exit(1);
 }
 

@@ -194,9 +194,14 @@ test("sonde : le maximum observé plafonne le TOTAL pris chez l'hôtel, jamais r
     overlays: { pmr: false, famille: false }, familyUnit: false, rooms: 1, file: "Y",
   }));
 
-  // sans sonde : on ne prend que ce qui est affiché (3 × 9)
+  // sans sonde : on ne prend que ce qui est affiché (3 × 9). Depuis le stock à deux
+  // niveaux, ces 27 chambres restent allouables mais sont de NIVEAU 2 (« à confirmer ») :
+  // aucune mesure d'hôtel ne les borne. Le 27 ne vaut donc plus « stock acquis » — la
+  // contrepartie est vérifiée juste après, sans quoi le chiffre serait un faux ferme.
   const sans = allocate({ dossiers, inventories: [inv], policy: DEFAULT_POLICY, station: STATION_BKK });
   assert.equal(sans.summary.ok, 27, "quantité affichée");
+  assert.equal(sans.summary.chambresFermes, 0, "aucune mesure d'hôtel : rien n'est ferme");
+  assert.equal(sans.summary.chambresAConfirmer, sans.summary.chambres, "tout le plan est à confirmer auprès de l'hôtel");
 
   // sélecteur encore plafonné (borne BASSE) : on retient le plus favorable, 30 — pas 27+30, pas 90
   const basse = applyProbeResult([inv], "h1", { found: true, hotel: "h1", requested_rooms: 30, rooms_selectable_max: 30, cap_reached: true });

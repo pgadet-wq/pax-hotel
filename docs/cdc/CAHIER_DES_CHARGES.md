@@ -596,3 +596,64 @@ Toute valeur lue sur la page « Plans and limits » du compte H (concurrence, mo
 | Étage 0 / A / B / C | Inventaire / Découverte / Relevés / Extension |
 | Sonde de capacité | Session courte vérifiant la disponibilité d'un nombre de chambres supérieur au plafond d'affichage |
 | Escalade DESK | Ligne du plan renvoyée à un traitement humain, avec motif et quantité |
+
+---
+
+## 19. Amendements datés (21/09/2026)
+
+Ce cahier des charges est aussi un document historique : les sections d'origine ne sont pas réécrites.
+Les amendements ci-dessous disent ce que le code fait **réellement** là où il a dépassé la spécification.
+En cas de contradiction, ce sont eux qui font foi.
+
+### 19.1 — §5.5bis · Liste passagers : format PAXLIST
+
+Le §5.5 décrit les colonnes du générateur v1/v2. La porte d'entrée nominale est désormais l'**ingestion
+d'une liste de compagnie au format PAXLIST** (`lib/paxlist.mjs`, ~1 000 lignes) : décodage BOM / UTF-16 /
+repli windows-1252, parseur RFC 4180 borné, détection de séparateur, alias d'en-têtes et de valeurs,
+schéma `zod` par ligne, rapport d'ingestion bloquant. **26 colonnes canoniques** (`PAXLIST_COLS`), dont
+sept d'identité pour les fiches C3. Spécification de référence : `docs/format-liste-passagers.md`.
+Fichiers remis à la compagnie : `data/exemples/paxlist-{modele-a-remplir,exemple,dictionnaire-colonnes}.csv`
+— les trois portent exactement les mêmes 26 colonnes, verrouillé par test.
+
+### 19.2 — §5.7bis · Ligne du plan : 36 colonnes
+
+Le §5.7 décrit « colonnes v1 + `conformite` ». La liste effective est `PLAN_COLS`
+(`hai-admin-mcp/lib/rapport.mjs`), **36 colonnes**. Les dix-sept ajoutées portent les réserves C2, C3,
+C6 et C7, et ce sont elles qui empêchent de lire une ligne comme acquise :
+
+- C2 — `pax`, `hotel_url`, `hors_plan`, `sous_reserve`, `stock_mesure`, `chambres_fermes`,
+  `chambres_a_confirmer`, `couchages_insuffisants`, `couchages_manquants` ;
+- C3 — `format_cabine` ;
+- C6 — `creneau_presentation`, `reglement_source`, `reglement_paiement_compagnie` ;
+- C7 — `carte_montant`, `carte_devise`, `carte_nb`, `carte_incomplet`.
+
+Une cellule vide n'est jamais un zéro : un montant non calculable s'écrit « non calculable », une donnée
+jamais relevée « [non relevé] », une ventilation inconnue « indéterminée ».
+
+### 19.3 — §8bis · Sorties : 9 livrables
+
+Le §8 en liste six. Un run avec découverte en produit **neuf** :
+`plan-<run>.csv`, `rooming-<run>.csv` (liste d'appel PAR HÔTEL), `fiches-<run>.csv` et
+`fiches-<run>.html` (**C3** : une fiche d'enregistrement par personne, imprimable A4),
+`rapport-<run>.md`, `messages-<run>.csv`, `cout-<run>.json`, `candidats-<run>.json`,
+`releves-<run>.json`. Un rejeu `--offline` en écrit huit (pas de découverte).
+Écrits à côté sans être des livrables : `run-<run>.state.json` (NOMINATIF, non téléchargeable),
+`validation-<run>.json` (journal append-only C6), `pax-<run>.json` (empreinte non nominative de la liste),
+`retention.log`.
+
+### 19.4 — §2.2bis · Validation humaine (C6) : dans l'outil
+
+Le §2.2 place la validation du plan hors de l'outil. Elle y est entrée : écran de validation,
+`POST` / `GET /api/validation`, journal append-only `out/validation-<runId>.json` portant la décision,
+son horodatage, l'empreinte SHA-256 du plan réellement affiché, les lignes écartées avec leur motif et la
+**portée** de l'identité du validateur (authentifiée derrière un proxy déclaré de confiance, déclarée
+seulement, ou absente — le serveur n'authentifie personne lui-même).
+**Restent hors de l'outil, par invariant : l'appel aux hôtels, la confirmation et la réservation (INV-1).**
+
+### 19.5 — §11bis · Rétention
+
+`policy.retention.{nominative_hours, purge_on_start}` gouverne trois purges du répertoire `out/` :
+au démarrage du serveur, à la fin d'un run, et sur demande de l'opérateur. Les trois utilisent la
+politique du **dernier run lancé**. Chaque purge écrit le seuil ET sa provenance dans `out/retention.log`.
+`rapport-<run>.md` est classé nominatif mais **volontairement non purgé** : arbitrage client non rendu,
+dit à chaque purge. La CLI `rebooking-v2` ne purge rien.

@@ -5,12 +5,34 @@ Les mesures réelles (durée, coût, sessions) sont relevées sur le compte H de
 
 ## 1. Tests hors ligne (§12.3 points 1-2)
 
+> **PROCÈS-VERBAL DU 15/09/2026 — MESURES PÉRIMÉES.** Les chiffres des §1 et §2 ci-dessous sont conservés tels
+> qu'ils ont été relevés ce jour-là : c'est un procès-verbal, il ne se réécrit pas. Ils ne valent PLUS comme
+> référence depuis la correction de la sonde (20/09) et le chantier C1-C7 (21/09).
+>
+> **Références en vigueur, mesurées le 21/09/2026** : `npm test` **278 cas, 0 échec** ·
+> `rebooking-v2 --offline` **90 dossiers logés / 67 en escalade**, 29 chambres fermes / 99 à confirmer,
+> 8 fichiers écrits (la découverte est sautée hors ligne) · `--dry-run` **85 chambres indicatives pour 173
+> demandées** (couverture INSUFFISANTE, dite comme telle) · **simulation complète 122 logés / 35 escalades**,
+> 26 569 € la nuit, borne haute 32 900 €, **9 livrables**.
+
+
 | Vérification | Résultat |
 |---|---|
 | `npm test` | **159 cas, 0 échec** (24 fichiers, ~2,6 s) — inclut les invariants statiques INV-7/INV-9 et les tests du câblage réel phase 5 |
 | `rebooking-v2 --offline data/simulate/releves-demo.json` | conforme : 324 pax → **88 dossiers logés, 69 en escalade**, 0 session, 0 € ; plan avec colonnes `conformite` et `mode_reglement`, messages FR/EN (`lang`), coût (`per_night`, `projection_total`, `upper_bound_at_caps`, `allowances` « non renseigné » H-7) |
 
 ## 2. Recette UI en mode simulation (§12.3 point 3)
+
+> **PROCÈS-VERBAL DU 15/09/2026 — MESURES PÉRIMÉES.** Les chiffres des §1 et §2 ci-dessous sont conservés tels
+> qu'ils ont été relevés ce jour-là : c'est un procès-verbal, il ne se réécrit pas. Ils ne valent PLUS comme
+> référence depuis la correction de la sonde (20/09) et le chantier C1-C7 (21/09).
+>
+> **Références en vigueur, mesurées le 21/09/2026** : `npm test` **278 cas, 0 échec** ·
+> `rebooking-v2 --offline` **90 dossiers logés / 67 en escalade**, 29 chambres fermes / 99 à confirmer,
+> 8 fichiers écrits (la découverte est sautée hors ligne) · `--dry-run` **85 chambres indicatives pour 173
+> demandées** (couverture INSUFFISANTE, dite comme telle) · **simulation complète 122 logés / 35 escalades**,
+> 26 569 € la nuit, borne haute 32 900 €, **9 livrables**.
+
 
 Serveur `node demo/server.mjs` **sans** `DEMO_ALLOW_PAID` (routes payantes verrouillées), navigateur sur `http://127.0.0.1:4310`.
 
@@ -27,7 +49,7 @@ Serveur `node demo/server.mjs` **sans** `DEMO_ALLOW_PAID` (routes payantes verro
 | Annulation propre | annulation à 21 s → frise arrêtée sur « annulé », plan conservé en l'état (105 logés · 52 escalade), bouton « Lancer la prise en charge » de nouveau actif |
 | Étage 0 verrouillé | `POST /api/inventaire/BKK/run` sans `DEMO_ALLOW_PAID` → **501** avec le message INV-8 (ajout manuel et drapeaux restent disponibles) |
 
-Le déroulé de démonstration en 8 étapes ([docs/deroule-demo.md](deroule-demo.md)) a été joué une fois en simulation sans accroc au cours de cette recette.
+Le déroulé de démonstration ([docs/deroule-demo.md](deroule-demo.md)) a été joué une fois en simulation sans accroc au cours de cette recette — dans sa version à 8 étapes ; il en compte 9 depuis l'ajout de l'écran de validation humaine (C6).
 
 ## 3. Probes réels archivés (§12.3 point 4) — phase 5
 
@@ -50,28 +72,67 @@ Probes lancés depuis la conversation phase 5 (accord explicite donné dans cett
 | Résultat inventaire | `data/inventaire/BKK.json` : **9 hôtels** `source: agent` (3 existants réconciliés + 6 nouveaux, 1 doublon Hyatt évité par `reconcileIds`), tous avec `payment` renseigné/`non_precise` et `capacity_hint` observé — critère phase 5 « ≥ 8 » atteint |
 | Observation H-3 (indice) | relevé réel Hyatt : `rooms_displayed_max: 9, cap_reached: true` — le plafond d'affichage Booking existe bien sur les pages réelles |
 
-## 4. Run complet réel BKK depuis l'UI (§12.3 point 5) — NON JOUÉ (décision du 15/09)
+## 4. Run complet réel BKK distant (§12.3 point 5) — JOUÉ le 16/09 (phase 7, run `mu3lnxm4`)
 
-Le run complet réel n'a **pas** été lancé en phase 6 : décision explicite de l'utilisateur à la clôture
-(« clôturer sans run réel »). Le critère « mesures réelles du run complet dans la recette » reste donc **ouvert** ;
-il sera couvert au plus tard par la répétition générale de la phase 7 (fiche phase 7 : un run simulé + un run
-réel distant), suivant le même protocole :
+Joué depuis le navigateur du poste opérateur sur `https://51.158.96.47` (instance Scaleway `fr-par`,
+voir §5), après accord explicite dans la conversation et `DEMO_ALLOW_PAID=1` posé dans
+`/etc/pax-hotel.env` le temps du run (retiré ensuite).
 
-1. accord explicite dans la conversation, puis `DEMO_ALLOW_PAID=1 node demo/server.mjs` (variable pour cette commande seule) ;
-2. run depuis l'UI sur BKK, chronométré (< 30 min attendu), coût lu en direct sur le bandeau ;
-3. téléchargement de plan / rapport / messages / coût ; mesures archivées dans le tableau ci-dessous ;
-4. si > 30 min : boutons §13 (`max_hotels_stage_b` 5→4, `maxSteps` B 45→40, `n_socle` 8→6, concurrence/stagger) et une relance maximum, après accord.
+**Premier essai (~04:17 UTC) : échec propre.** Chaque `startSession` refusée par la plateforme H en
+403 « explicit deny in an identity-based policy » — cause : clé API **tronquée à la saisie** dans
+`nano` sur l'instance (48 caractères au lieu de 51, vérifié par empreintes SHA-256). Le moteur a
+dégradé exactement comme spécifié : retries, substitutions en cascade, arrêt d'extension « épuisé »,
+escalades chiffrées (Y 131 / J 26 / W 16), 0 session démarrée, 0 $. Clé recopiée à l'identique
+(fichier env reconstruit depuis le poste, empreintes concordantes), service redémarré, relance.
 
-Attendu (base mesures du 15/09) : découverte probablement sautée (inventaire BKK frais, 9 hôtels), relevés
-Étage B ~0,75-1,50 $, extension bornée 18 sessions / 10 $ / 4 vagues — coût total ~2-5 $.
+**Run `mu3lnxm4` (16/09) :**
 
 | Mesure | Valeur |
 |---|---|
-| Date / heure | — (non joué en phase 6) |
-| Durée totale (bandeau « durée ») | — |
-| Coût agents (bandeau, live) | — |
-| Sessions (découverte + relevés + extension) | — |
-| Vagues d'extension / sondes | — |
-| Dossiers logés / escalades | — |
-| Téléchargements (plan, rapport, messages, coût) | — |
-| Réglages §13 appliqués (si > 30 min) | — |
+| Date / heure (UTC) | 16/09/2026 — sessions H de 04:27:47 à 04:51:48 |
+| Durée totale | **≈ 25 min** (< 30 min, objectif §13 tenu) — sans relance |
+| Coût agents | extension mesurée **1,86 $** · total ≈ 2,5 $ (socle + extension ; bandeau exact à reporter) |
+| Tokens | **≈ 5,63 M** (delta quota H : 19,68 M → 25,31 M sur la fenêtre) |
+| Sessions | **17** : 5 relevés socle + extension **12/18** (5 sondes + 7 relevés) ; découverte **sautée** (inventaire du 15/09 frais) |
+| Vagues d'extension | **2** — bornes non atteintes (12/18 sessions, 1,86/10 $), arrêt « plus de sonde possible ni de candidat à relever » |
+| Concurrence observée | **5 sessions simultanées** au socle (départs 04:27:47 + 4 × 04:27:57), puis file continue — la limite org affichée (3) n'est pas apparue stricte (H-9) |
+| Dossiers | **118 logés (156 chambres) / 39 escalades** Y « DESK (capacité) » |
+| Coût hébergement relevé | **12 305,48 €/nuit** (J 1 030 + W 1 187,48 + Y 10 088) ; borne haute aux plafonds 32 900 € ; repas/transport « non renseigné » (H-7) |
+| Téléchargements | **6/6 OK** (plan, rapport, messages, coût, candidats, relevés) — après confiance de la CA locale sur le poste (§5) |
+| Réglages §13 appliqués | aucun |
+
+Faits notables du run réel :
+
+- **3 fiches d'inventaire mortes sur 12** (Divalux 404, Le Méridien 404, Novotel redirigé vers le
+  Hyatt par Booking) → substitutions automatiques jouées en conditions réelles ; c'est la cause
+  principale des 39 escalades (≈ un quart du socle disparu), avec le plafond Y (80 €) serré face au
+  stock du jour — 24 chambres Y prises au Hyatt en dérogation « HORS BARÈME +88 € ».
+- **H-3 observée en réel** : plafonds d'affichage Booking bien présents (Hyatt 9/9 affichées,
+  King 7 `cap_reached`) ; 5 sondes exécutées par l'extension.
+- 1 session `completed`, 16 fermées `interrupted` **après réponse** par le pump (comportement voulu,
+  phase 5) ; aucune 429, aucune file d'attente visible.
+- Levier de résorption des 39 : relancer avec « Forcer la découverte » (candidats au-delà de
+  l'inventaire) et/ou rafraîchir l'Étage 0 (répare les URLs mortes) — et, en séance, montrer
+  l'édition du plafond/dérogation Y.
+
+## 5. Déploiement Scaleway et vérifications distantes (phase 7, 15-16/09)
+
+Instance `fr-par-1` PRO2-S (Ubuntu 24.04), IP `51.158.96.47`, installée par `deploy/install.sh`
+(Node 22, utilisateur `paxhotel`, service systemd durci, Caddy). Détails : `deploy/scaleway.md`.
+
+| Vérification (fiche phase 7) | Résultat |
+|---|---|
+| HTTPS + auth basique | OK — `401` sans identifiants, UI complète avec `demo` + mot de passe ; certificat `tls internal` (IP sans domaine), CA locale de Caddy installée sur le poste (cadenas propre) |
+| SSE à travers Caddy | OK — `flush_interval -1`, frise et cartes agents en direct pendant les runs simulé et réel |
+| `systemctl restart pax-hotel` | OK — service revenu `active` seul (`Restart=always`), bandeau INV-8 correct |
+| Secrets | OK — aucun secret dans le dépôt ; `/etc/pax-hotel.env` en `600 root:root` ; clé jamais dans un script |
+| Ports | 22 et 443 seuls ouverts ; 4310 lié à `127.0.0.1` uniquement |
+| Run simulé distant | OK — run `mu2jvzt7` : 1 min 27 s, 157 logés / 0 escalade, 0,00 $, extension vague 1 (2/18 sessions), fermeture/réouverture d'onglet → snapshot complet |
+| Run réel distant | OK — run `mu3lnxm4`, voir §4 |
+
+Incidents d'installation, tous résolus (détail : conversation phase 7) : image Scaleway avec Docker
+préinstallé occupant 80/443 (conteneur coupé, `docker.service`/`docker.socket` désactivés,
+`auto_https disable_redirects` dans le Caddyfile) ; téléchargements bloqués par Edge sur certificat
+auto-signé (« Problème de réseau ») → résolu par confiance de la CA locale Caddy sur le poste —
+pour une séance depuis une autre machine : installer cette CA ou passer sur un nom de domaine
+(Let's Encrypt automatique) ; clé API tronquée à la saisie (§4).

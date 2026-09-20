@@ -35,11 +35,13 @@ test("CLI rebooking-v2 : --dry-run BKK — besoins, inventaire, décision décou
   assert.match(r.stdout, /aucun agent, aucun réseau/);
 });
 
-test("CLI rebooking-v2 : --offline rejoue les fixtures — plan, rapport, messages, coût, 0 €", () => {
+test("CLI rebooking-v2 : --offline rejoue les fixtures — plan, rapport, messages, coût, 0,00 $", () => {
   const r = run(CLI, "--offline", path.join(ROOT, "data", "simulate", "releves-demo.json"), "--station", "BKK", "--checkin", "2026-10-04");
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /\[done \]/);
-  assert.match(r.stdout, /0 € \(aucune session\)/);
+  // le coût agents se libelle en DOLLARS partout (borne `max_cost_usd_per_run`), jamais en euros
+  assert.match(r.stdout, /0,00 \$ \(aucune session lancée\)/);
+  assert.ok(!/coût agents : 0 €/.test(r.stdout), "le coût agents ne doit plus sortir en euros");
   for (const kind of ["plan-", "rapport-", "messages-", "cout-", "releves-"]) {
     const m = r.stdout.match(new RegExp(`écrit out[\\\\/](${kind}[a-z0-9]+\\.(csv|md|json))`));
     assert.ok(m, `sortie ${kind}* absente de la sortie CLI`);

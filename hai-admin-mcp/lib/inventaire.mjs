@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { companyPaymentPossible } from "./reglement.mjs";
 import { effectiveCaps } from "./policy.mjs";
-import { KNOWN_STATIONS } from "./scenario.mjs";
+import { stationCodeSchema } from "./scenario.mjs";
 
 /** Répertoire des inventaires (résolu depuis ce fichier, jamais le cwd). */
 export const INVENTAIRE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "inventaire");
@@ -33,6 +33,13 @@ const HotelEntrySchema = z.object({
   review_count: z.number().int().min(0).nullable().default(null),
   distance_km: z.number().nullable().default(null),
   distance_ref: z.enum(["airport", "zone_center"]).nullable().default(null),
+  /** Couronne de recherche ou l'hotel a ete TROUVE (rang de station.search.couronnes).
+   * Source la plus fiable dont dispose l'allocation : `distance_km` est nulle ou fausse
+   * sur 6 des 9 hotels de BKK (un `0` sans `distance_ref` veut dire « non mesure »).
+   * Sans ce champ au schema, zod retirait la couronne a l'ecriture : le marquage pose par
+   * la decouverte ne survivait pas au run, et tout hotel redevenait de couronne inconnue.
+   * Un hotel revu dans une couronne plus lointaine garde la plus PROCHE ou il a ete vu. */
+  couronne: z.number().int().min(1).max(9).nullable().default(null),
   amenities: z
     .object({
       wifi_free: z.boolean().nullable().default(null),
@@ -68,7 +75,11 @@ const HotelEntrySchema = z.object({
 });
 
 export const InventaireSchema = z.object({
-  station: z.enum(KNOWN_STATIONS),
+  // VERROU D'ESCALE : `stationCodeSchema()` relit le repertoire des fiches A CHAQUE
+  // parse, comme `scenario.mjs`. L'ancien `z.enum(KNOWN_STATIONS)` figeait une PHOTO du
+  // disque prise a l'import : une fiche deposee pendant que le serveur tourne etait
+  // acceptee par le scenario et refusee par l'inventaire, pour la meme escale.
+  station: stationCodeSchema(),
   updated_at: iso.nullable().default(null), // null = jamais rafraîchi (inventaire vide valide)
   reference: z.object({ checkin: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), nights: z.number().int().min(1) }).nullable().default(null),
   hotels: z.array(HotelEntrySchema).default([]),

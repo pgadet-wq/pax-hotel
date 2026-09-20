@@ -32,6 +32,73 @@ export const AMENITY_LABELS = {
   accessible: "accessibilité PMR",
 };
 
+/**
+ * Criteres de la POLITIQUE DE PRISE EN CHARGE (cases a cocher de l'interface).
+ *
+ * Remplace l'ancienne liste libre `global.priorities`, qui ne pouvait designer que
+ * trois files figees (`pmr`, `famille`, cabine) : tout autre mot saisi n'avait aucun
+ * effet. Chaque critere porte DEUX reglages independants, qu'il ne faut pas confondre :
+ *
+ *  - `rang`       : l'ordre de SERVICE. Qui choisit sa chambre en premier.
+ *  - `proximite`  : le droit aux couronnes PROCHES. Qui peut etre envoye loin.
+ *
+ * Les deux sont necessaires. Un rang seul ne protege personne : si les PMR sont servis
+ * d'abord et epuisent le vivier proche, le passager qui repart a 05h40 finit a 40 km et
+ * manque son vol. Le garde-fou reel est le budget de trajet du dossier
+ * (`dossier.trajet_max_min`, calcule sur l'heure du vol suivant), qui est une contrainte
+ * DURE : aucun rang ne permet de l'outrepasser.
+ *
+ * `proximite` : "stricte" = couronne 1 tant qu'elle a du stock, sinon escalade plutot
+ * que d'eloigner · "preferee" = couronne la plus proche disponible, eloignement permis
+ * en dernier recours · "aucune" = le budget de trajet est la seule limite.
+ */
+export const CRITERE_KEYS = [
+  "correspondance_serree", "pmr", "medical", "mineur_seul", "bebe", "famille",
+  "equipage", "J", "W", "Y", "groupe", "sans_droit_entree", "flying_blue",
+];
+
+export const CRITERE_LABELS = {
+  correspondance_serree: "correspondance serrée (horaire du vol suivant)",
+  pmr: "passager à mobilité réduite",
+  medical: "cas médical ou civière",
+  mineur_seul: "mineur non accompagné",
+  bebe: "famille avec bébé ou enfant en bas âge",
+  famille: "famille",
+  equipage: "équipage (repos réglementaire)",
+  J: "cabine affaires",
+  W: "cabine premium",
+  Y: "cabine économique",
+  groupe: "groupe constitué",
+  sans_droit_entree: "sans droit d'entrée sur le territoire",
+  flying_blue: "statut Flying Blue",
+};
+
+const critere = z.object({
+  cle: z.enum(CRITERE_KEYS),
+  actif: z.boolean().default(true),
+  rang: z.number().int().min(1).max(99),
+  proximite: z.enum(["stricte", "preferee", "aucune"]).default("aucune"),
+  /** true = ne cree pas de file, departage seulement a l'interieur d'une file. */
+  departage: z.boolean().default(false),
+});
+
+/** Politique de prise en charge livree par defaut - chaque ligne est une case a cocher. */
+export const CRITERES_DEFAUT = [
+  { cle: "correspondance_serree", actif: true, rang: 1, proximite: "stricte", departage: false },
+  { cle: "medical", actif: true, rang: 2, proximite: "stricte", departage: false },
+  { cle: "pmr", actif: true, rang: 3, proximite: "preferee", departage: false },
+  { cle: "mineur_seul", actif: true, rang: 4, proximite: "preferee", departage: false },
+  { cle: "bebe", actif: true, rang: 5, proximite: "preferee", departage: false },
+  { cle: "famille", actif: true, rang: 6, proximite: "aucune", departage: false },
+  { cle: "equipage", actif: true, rang: 7, proximite: "preferee", departage: false },
+  { cle: "J", actif: true, rang: 8, proximite: "aucune", departage: false },
+  { cle: "W", actif: true, rang: 9, proximite: "aucune", departage: false },
+  { cle: "Y", actif: true, rang: 10, proximite: "aucune", departage: false },
+  { cle: "groupe", actif: false, rang: 11, proximite: "aucune", departage: false },
+  { cle: "sans_droit_entree", actif: true, rang: 12, proximite: "aucune", departage: false },
+  { cle: "flying_blue", actif: true, rang: 99, proximite: "aucune", departage: true },
+];
+
 const cabinPolicy = z.object({
   min_stars: z.number().int().min(0).max(5),
   max_stars: z.number().int().min(0).max(5).nullable(),
@@ -39,20 +106,58 @@ const cabinPolicy = z.object({
   nice_to_have: z.array(z.enum(AMENITY_KEYS)).default([]),
   price_cap_eur: z.number().positive(),
   allow_above_cap_if_no_alternative: z.boolean().default(true),
+  /** C3 - format de chambre attendu pour la cabine. Motifs (insensibles a la casse)
+   * cherches dans le libelle releve : la chambre la MIEUX classee est preferee a la
+   * moins chere tant qu'elle reste sous le plafond. Liste vide = aucune preference. */
+  room_type_patterns: z.array(z.string()).default([]),
 });
 
 export const PolicySchema = z.object({
   version: z.literal(2).default(2),
   cabins: z.object({ J: cabinPolicy, W: cabinPolicy, Y: cabinPolicy }),
   global: z.object({
+    /** DEPRECIE - conserve pour les politiques enregistrees avant le 21/09/2026.
+     * Ne pilote plus rien des que `prise_en_charge.criteres` est renseigne (defaut).
+     * Une valeur saisie ici qui n'est pas reprise en critere produit un avertissement. */
     priorities: z.array(z.string()).default(["pmr", "famille", "J", "W", "Y"]),
+    /** Politique de prise en charge : les cases a cocher de l'interface. */
+    prise_en_charge: z
+      .object({
+        criteres: z.array(critere).default(CRITERES_DEFAUT),
+        /** Age (en annees revolues) en deca duquel un enfant declenche le critere `bebe`.
+         * Un INF le declenche toujours, quel que soit l'age declare. */
+        age_bas_max: z.number().int().min(0).max(17).default(6),
+        /** Ouvrir une couronne plus lointaine quand la precedente ne suffit plus.
+         * Sans cela, un vivier proche epuise se solde en escalades alors que des chambres
+         * existent a 20 km pour les dossiers qui ont le temps d'y aller. */
+        elargir_si_insuffisant: z.boolean().default(true),
+      })
+      .default({ criteres: CRITERES_DEFAUT, age_bas_max: 6, elargir_si_insuffisant: true }),
+    /** Calcul du budget de trajet d'un dossier a partir de l'heure du vol suivant.
+     * Toutes les valeurs sont des minutes, toutes sont des choix d'EXPLOITATION
+     * (declares), aucune n'est mesuree. */
+    correspondance: z
+      .object({
+        /** Presentation a l'enregistrement avant le depart du vol suivant. */
+        avance_avant_vol_min: z.number().int().min(0).max(600).default(120),
+        /** En deca de ce repos utile a l'hotel, l'hotel n'a pas de sens : le dossier sort
+         * en escalade « correspondance trop serree » (repos cote piste a organiser). */
+        repos_minimal_min: z.number().int().min(0).max(1440).default(240),
+        /** Marge d'aleas : bus, file d'attente, recuperation des bagages. */
+        marge_min: z.number().int().min(0).max(240).default(30),
+        /** Fenetre en deca de laquelle le dossier compte comme « correspondance serree ». */
+        seuil_serree_min: z.number().int().min(0).max(2880).default(480),
+      })
+      .default({ avance_avant_vol_min: 120, repos_minimal_min: 240, marge_min: 30, seuil_serree_min: 480 }),
     rooming: z
       .object({
         family_unit_max: z.object({ adults: z.number().int(), children: z.number().int() }),
         beyond: z.literal("two_rooms_same_hotel").default("two_rooms_same_hotel"),
         infants_no_capacity: z.boolean().default(true),
+        /** C3 - un dossier sans adulte mais avec mineur ne part jamais seul a l'hotel. */
+        minor_alone_escalates: z.boolean().default(true),
       })
-      .default({ family_unit_max: { adults: 2, children: 2 }, beyond: "two_rooms_same_hotel", infants_no_capacity: true }),
+      .default({ family_unit_max: { adults: 2, children: 2 }, beyond: "two_rooms_same_hotel", infants_no_capacity: true, minor_alone_escalates: true }),
     overlays: z
       .object({
         pmr: z
@@ -88,8 +193,35 @@ export const PolicySchema = z.object({
         max_candidates: z.number().int().min(3).max(12).default(10),
         max_hotels_stage_b: z.number().int().min(2).max(8).default(5),
         max_hotels_total: z.number().int().min(2).max(15).default(10),
+        /** C1 - rayon de recherche en metres envoye a Booking (null = valeur de la fiche escale). */
+        radius_m: z.number().int().min(500).max(50000).nullable().default(null),
+        /** C1 - traduire les prestations exigees de la cabine en filtres de recherche. */
+        apply_amenity_filters: z.boolean().default(true),
+        /** C1 - traduire le plafond par nuit en filtre de prix.
+         * DEFAUT FAUX A DESSEIN : la syntaxe `nflt=price=EUR-min-max-1` est une
+         * hypothese externe NON VALIDEE (voir HYPOTHESE_FILTRE_PRIX dans hai-urls.mjs).
+         * Une syntaxe erronee ne rend pas une erreur, elle rend zero resultat : sur un
+         * run REEL payant, cela vide le vivier sans que rien ne le signale. A basculer
+         * a vrai seulement apres qu'une sonde a montre que le filtre repond. */
+        apply_price_filter: z.boolean().default(false),
       })
-      .default({ min_review_score: 7, n_socle: 8, max_candidates: 10, max_hotels_stage_b: 5, max_hotels_total: 10 }),
+      .default({
+        min_review_score: 7, n_socle: 8, max_candidates: 10, max_hotels_stage_b: 5, max_hotels_total: 10,
+        radius_m: null, apply_amenity_filters: true, apply_price_filter: false,
+      }),
+    /** C4/C6 - etalement des convocations au comptoir. Sans lui, les 157 dossiers sont
+     * convoques a la meme minute. `debut` null = calcule par l'appelant sur l'horloge de
+     * l'escale (heure du run + `delai_min`) ; une heure saisie prime. */
+    presentation: z
+      .object({
+        enabled: z.boolean().default(true),
+        debut: z.string().regex(/^\d{2}:\d{2}$/).nullable().default(null),
+        delai_min: z.number().int().min(0).max(480).default(30),
+        pas_minutes: z.number().int().min(1).max(120).default(15),
+        par_creneau: z.number().int().min(1).nullable().default(null),
+        fenetre_minutes: z.number().int().min(15).max(1440).default(120),
+      })
+      .default({ enabled: true, debut: null, delai_min: 30, pas_minutes: 15, par_creneau: null, fenetre_minutes: 120 }),
     negotiated_rates: z.literal(false).default(false), // verrouillé : prix publics uniquement (INV-3)
     currency: z.literal("EUR").default("EUR"),
     free_cancellation_preferred: z.boolean().default(true),
@@ -108,10 +240,21 @@ export const PolicySchema = z.object({
         .object({
           enabled: z.boolean().default(true),
           load_includes: z.array(z.enum(["nuit", "repas", "transport"])).default(["nuit", "repas", "transport"]),
+          /** C7 - granularite d'emission : une carte par dossier ou une par personne a loger. */
+          per: z.enum(["dossier", "personne"]).default("dossier"),
+          /** C7 - marge de securite ajoutee au montant calcule (taxes locales, extras). */
+          marge_eur: z.number().nonnegative().default(0),
+          /** C7 - montant arrondi au multiple superieur (0 = pas d'arrondi). */
+          arrondi_eur: z.number().nonnegative().default(10),
+          /** C7 - plafond par carte ; depassement = escalade « carte insuffisante ». */
+          plafond_eur: z.number().positive().nullable().default(null),
         })
-        .default({ enabled: true, load_includes: ["nuit", "repas", "transport"] }),
+        .default({ enabled: true, load_includes: ["nuit", "repas", "transport"], per: "dossier", marge_eur: 0, arrondi_eur: 10, plafond_eur: null }),
     })
-    .default({ default_mode: "compagnie", prepaid_card: { enabled: true, load_includes: ["nuit", "repas", "transport"] } }),
+    .default({
+      default_mode: "compagnie",
+      prepaid_card: { enabled: true, load_includes: ["nuit", "repas", "transport"], per: "dossier", marge_eur: 0, arrondi_eur: 10, plafond_eur: null },
+    }),
   /** Bornes d'extension (H-2, fixées le 14/09) — larges, visibles, éditables. */
   extension: z
     .object({
@@ -122,10 +265,27 @@ export const PolicySchema = z.object({
       max_sessions_per_run: z.number().int().min(0).max(50).default(18),
       max_cost_usd_per_run: z.number().nonnegative().default(10),
       probe_no_rooms_max: z.number().int().min(9).max(50).default(30),
+      /** C5 - budget horloge du run entier, en minutes. Quatrieme borne, au meme rang
+       * que les vagues, les sessions et le cout : l'extension s'arrete a l'echeance. */
+      max_minutes_per_run: z.number().int().min(5).max(240).default(45),
+      /** C2 - SEUIL DE VIGILANCE, PAS un plafond (voir allocate.mjs). Il ne retranche AUCUNE
+       * chambre du plan : au-dela, le volume « a confirmer » engage chez un meme hotel est
+       * signale au validateur et l'hotel designe prioritaire a sonder. La contrepartie qui
+       * existe vraiment contre l'affichage plafonne, ce sont `stock_mesure`,
+       * `chambres_a_confirmer` et `summary.complet = false`. Sert aussi de valeur de repli
+       * quand une quantite depasse `room_qty_sane_max`. */
+      hotel_cap_without_probe: z.number().int().min(1).max(200).default(20),
+      /** C2 - quantite affichee au-dela de laquelle un releve est juge aberrant et ramene
+       * a `hotel_cap_without_probe` avec avertissement (agent qui hallucine un stock). */
+      room_qty_sane_max: z.number().int().min(1).max(500).default(60),
+      /** C2 - relancer une decouverte elargie quand l'inventaire est epuise et qu'il
+       * reste des passagers non loges. */
+      rediscover_on_exhaustion: z.boolean().default(true),
     })
     .default({
       enabled: true, probe_same_hotel_first: true, batch_size: "auto",
       max_waves: 4, max_sessions_per_run: 18, max_cost_usd_per_run: 10, probe_no_rooms_max: 30,
+      max_minutes_per_run: 45, hotel_cap_without_probe: 20, room_qty_sane_max: 60, rediscover_on_exhaustion: true,
     }),
   /** Vitesse et puissance (CDC §16) — « auto » = maximum du plan H, plafonné à 6.
    * Modèles H-9 (mesuré phase 5) : les ids de MODÈLE sont `holo3-122b-a10b` (Holo3
@@ -144,8 +304,22 @@ export const PolicySchema = z.object({
     .object({
       max_age_days: z.number().int().min(1).default(30), // H-4 : valeur de départ, éditable
       min_candidates_per_tier: z.number().int().min(1).default(2),
+      /** C2 - sauter la decouverte se decide sur les chambres MESUREES, jamais sur les
+       * chambres supposees (9 par hotel sans indice de capacite). Sans cela, 20 hotels
+       * « couvrent » 180 chambres qu'aucun releve n'a vues, et le run s'arrete « epuise »
+       * face a des passagers non loges. Une decouverte coute une session ; un plan qui
+       * s'effondre coute une nuit d'escale. */
+      decide_on_measured_capacity: z.boolean().default(true),
     })
-    .default({ max_age_days: 30, min_candidates_per_tier: 2 }),
+    .default({ max_age_days: 30, min_candidates_per_tier: 2, decide_on_measured_capacity: true }),
+  /** RGPD - duree de vie des sorties NOMINATIVES (plan, rooming, messages, fiches).
+   * Les sorties non nominatives (candidats, releves, cout) ne sont pas concernees. */
+  retention: z
+    .object({
+      nominative_hours: z.number().int().min(1).max(8760).default(72),
+      purge_on_start: z.boolean().default(true),
+    })
+    .default({ nominative_hours: 72, purge_on_start: true }),
 });
 
 export const DEFAULT_POLICY = PolicySchema.parse({
@@ -156,12 +330,14 @@ export const DEFAULT_POLICY = PolicySchema.parse({
       required_amenities: ["wifi_free", "room_service_24h", "workspace"],
       nice_to_have: ["airport_shuttle", "restaurant_late"],
       price_cap_eur: 250, allow_above_cap_if_no_alternative: true,
+      room_type_patterns: ["suite", "executive", "club", "deluxe", "premium"],
     },
     W: {
       min_stars: 3, max_stars: 4,
       required_amenities: ["wifi_free", "breakfast_available"],
       nice_to_have: ["airport_shuttle"],
       price_cap_eur: 130, allow_above_cap_if_no_alternative: true,
+      room_type_patterns: ["superior", "deluxe", "premium"],
     },
     Y: {
       min_stars: 3, max_stars: null,

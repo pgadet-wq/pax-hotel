@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  ingestPassagers, readPaxCsv, normalizePaxRows, splitPaxRows, IngestError, formatRapport,
+  ingestPassagers, readPaxCsv, normalizePaxRows, splitPaxRows, IngestError, formatRapport, PAXLIST_COLS,
 } from "../lib/paxlist.mjs";
 import { buildDossiers } from "../lib/dossiers.mjs";
 import { allocate } from "../lib/allocate.mjs";
@@ -21,6 +21,44 @@ const line = (o = {}) => {
   return [d.pnr, d.nom, d.prenom, d.type_pax, d.cabine, d.categorie, d.statut_pax, d.assistance, d.droit_entree, d.chambres_demandees, d.age].join(";");
 };
 const csv = (...lines) => `${HEAD}\n${lines.join("\n")}\n`;
+
+/** En-tête (1re ligne) d'un fichier d'exemple, BOM retiré. */
+const enteteExemple = (nom) =>
+  fs.readFileSync(path.join(ROOT, "data", "exemples", nom), "utf8")
+    .replace(/^﻿/, "")
+    .split(/\r?\n/)[0]
+    .split(";")
+    .map((c) => c.trim());
+
+test("paxlist : modèle, exemple et dictionnaire remis à la compagnie décrivent LES MÊMES colonnes", () => {
+  // Les trois fichiers sont livrés ensemble comme un jeu. Le modèle a porté 25 colonnes
+  // pendant que le dictionnaire en décrivait 26 : la compagnie ne pouvait pas fournir
+  // `classe_reservation`, précisément la colonne que le dictionnaire lui recommandait.
+  const dico = fs.readFileSync(path.join(ROOT, "data", "exemples", "paxlist-dictionnaire-colonnes.csv"), "utf8")
+    .replace(/^﻿/, "")
+    .split(/\r?\n/)
+    .slice(1)
+    .filter(Boolean)
+    .map((l) => l.split(";")[0].trim());
+  const attendu = [...PAXLIST_COLS].sort();
+  assert.deepEqual([...enteteExemple("paxlist-modele-a-remplir.csv")].sort(), attendu, "modèle à remplir");
+  assert.deepEqual([...enteteExemple("paxlist-exemple.csv")].sort(), attendu, "exemple rempli");
+  assert.deepEqual([...dico].sort(), attendu, "dictionnaire de colonnes");
+});
+
+test("paxlist : un même alias d'en-tête ne désigne jamais deux colonnes canoniques", () => {
+  // Un alias partagé fait refuser le fichier ENTIER sur « En-tête en double ». Le module
+  // lève désormais à l'import si la collision revient ; ce test la vérifie par les faits,
+  // sur le couple qui avait échappé à la relecture (`class` / `cos`, cabine contre RBD).
+  const ok = ingestPassagers("pnr;nom;type_pax;cabine;classe_reservation\nAB12CD;MARTIN;ADT;Y;Q\n");
+  assert.equal(ok.rows.length, 1);
+  assert.equal(ok.rows[0].classe_reservation, "Q", "la lettre RBD est conservée comme trace d'audit");
+  // et un fichier qui porte VRAIMENT deux fois la même colonne nomme le remède
+  assert.throws(
+    () => ingestPassagers("pnr;nom;type_pax;cabine;cos\nAB12CD;MARTIN;ADT;Y;Q\n"),
+    (err) => err instanceof IngestError && /En-tête en double/.test(err.message) && /Remède/.test(err.message),
+  );
+});
 
 test("paxlist : le fichier d'exemple du dépôt est ingéré sans refus, avec ses cas remarquables", () => {
   const p = path.join(ROOT, "data", "exemples", "paxlist-exemple.csv");

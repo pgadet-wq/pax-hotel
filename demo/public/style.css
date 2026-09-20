@@ -329,3 +329,94 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 .source-liste.reelle { background: #e8f5ec; color: var(--ok); border: 1px solid var(--ok); }
 .source-liste.generee { background: #fff6e5; color: var(--warn); border: 1px solid var(--warn); }
 .source-liste.refus { background: var(--esc-bg); color: var(--err); border: 1px solid var(--err); }
+
+/* ===================== validation humaine de la répartition (C6) ===================== */
+
+/* états ajoutés en vague 2 : une décision prise, un refus, un run coupé en vol */
+.chip.valide { background: var(--ok); color: #fff; }
+.chip.refuse { background: var(--err); color: #fff; }
+.chip.interrupted { background: #475569; color: #fff; }
+
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; overflow-wrap: anywhere; }
+.avert { color: var(--warn); }
+
+/* INV-1 : l'écran doit dire, sans ambiguïté possible, que rien n'est réservé */
+.inv1-note {
+  border-left: 4px solid var(--err);
+  background: var(--esc-bg);
+  padding: 8px 12px;
+  margin: 0 0 12px;
+  font-size: 0.93em;
+  line-height: 1.5;
+}
+
+.c6-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+.c6-grid .cell { border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+.c6-grid h3 { margin: 0 0 5px; font-size: 0.9em; color: var(--muted); }
+.c6-grid ul { margin: 0; padding-left: 16px; }
+.c6-grid li { margin: 2px 0; font-size: 0.9em; overflow-wrap: anywhere; }
+
+.c6-h3 { font-size: 0.95em; margin: 14px 0 4px; }
+.c6-reserves { margin: 4px 0 0 18px; padding: 0; }
+.c6-reserves li { color: var(--warn); margin: 2px 0; font-size: 0.92em; }
+.c6-ok { color: var(--ok); font-weight: 600; margin: 8px 0 0; }
+
+.c6-exclusion { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.c6-exclusion input[type="text"] { flex: 1 1 auto; }
+.c6-commentaire { display: block; margin: 10px 0 4px; font-size: 0.92em; }
+.c6-commentaire textarea { width: 100%; font: inherit; padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; }
+
+.c6-journal {
+  border-left: 3px solid var(--accent);
+  padding: 5px 10px;
+  margin: 6px 0;
+  font-size: 0.9em;
+  line-height: 1.5;
+  background: #f8fafc;
+}
+
+/* case « écarter » dans la liste de répartition */
+.col-ecarter { width: 62px; text-align: center; }
+#plan-table td.col-ecarter { text-align: center; }
+#plan-table input.ecarter { transform: scale(1.15); }
+#plan-table tr.row-ecartee { text-decoration: line-through; opacity: 0.55; }
+
+/* ===================== dry-run : la recherche réellement envoyée (C1) ===================== */
+
+.recherche-bloc { margin-top: 12px; }
+.recherche-passe { border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; margin: 6px 0; font-size: 0.9em; }
+.recherche-passe .url { color: var(--muted); margin: 3px 0; }
+.recherche-passe ul { margin: 4px 0 0 16px; padding: 0; }
+.recherche-passe li { margin: 1px 0; }
+
+/* ============== politique de prise en charge : les cases à cocher ============== */
+
+/* la distinction que tout le dispositif suppose : rang ≠ proximité */
+.pec-regle {
+  border-left: 3px solid var(--accent);
+  background: #f4f8fc;
+  padding: 6px 10px;
+  margin: 6px 0;
+  font-size: 0.9em;
+  line-height: 1.5;
+}
+.pec-h4 { margin: 12px 0 2px; font-size: 0.92em; color: #33414f; }
+
+.pec-criteres { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.pec-critere { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+.pec-critere > label.checkline { margin: 0; font-size: 0.92em; font-weight: 600; }
+.pec-reglages { display: flex; flex-direction: column; align-items: stretch; gap: 3px; margin-top: 3px; padding-left: 22px; }
+.pec-reglages.off { opacity: 0.45; }
+.pec-reglages .pec-champ { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 0.85em; color: var(--muted); }
+.pec-reglages .pec-champ select { flex: 1 1 auto; min-width: 0; }
+.pec-reglages .checkline { margin: 0; font-size: 0.85em; color: var(--muted); }
+.pec-rang { width: 62px; }
+.pec-prox { width: 100%; font-size: 0.92em; }
+
+#pec-incoherence:empty, #pec-deprecie:empty { display: none; }
+#pec-deprecie { border-left: 3px solid var(--warn); padding-left: 8px; line-height: 1.45; }
+
+/* couronnes de l'escale : des temps DÉCLARÉS, jamais mesurés */
+.pec-couronnes { font-size: 0.9em; }
+.pec-couronnes-liste { margin: 4px 0 0 16px; padding: 0; }
+.pec-couronnes-liste li { margin: 2px 0; overflow-wrap: anywhere; }

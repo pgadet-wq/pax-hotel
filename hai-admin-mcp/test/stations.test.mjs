@@ -57,7 +57,17 @@ test("hai-urls : buildNflt — distance présent pour BKK, ABSENT pour NOU (EX-D
   assert.ok(nfltBkk.socle.includes("hotelfacility=107")); // wifi
   assert.ok(nfltBkk.socle.includes("review_score=70"));
   assert.ok(nfltBkk.socle.includes("ht_id=204"));
-  assert.equal(nfltBkk.premium, "class=4;class=5;hotelfacility=5;ht_id=204");
+  // La passe premium dérive des prestations EXIGÉES de la cabine J
+  // (DEFAULT_POLICY.cabins.J.required_amenities = wifi_free, room_service_24h, workspace) :
+  // wifi = hotelfacility=107 et service en chambre = hotelfacility=5 ; « workspace » n'a
+  // pas de code Booking connu et sort en `non_filtrables`. Le wifi manquait ici tant que
+  // la passe premium ne relisait pas la politique : la chaîne attendue l'intègre désormais.
+  // Aucun filtre de prix : discovery.apply_price_filter est FAUX par défaut (syntaxe non validée).
+  assert.equal(nfltBkk.premium, "class=4;class=5;hotelfacility=107;hotelfacility=5;ht_id=204");
+  assert.ok(
+    nfltBkk.details.non_filtrables.some((n) => n.prestation === "workspace"),
+    "workspace exigé en J mais non filtrable : doit être signalé, jamais avalé",
+  );
 
   const nfltNou = buildNflt(DEFAULT_POLICY, nou);
   assert.ok(!nfltNou.socle.includes("distance="), nfltNou.socle);

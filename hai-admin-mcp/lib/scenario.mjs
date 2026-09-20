@@ -5,9 +5,44 @@
  */
 import { z } from "zod";
 import { PolicySchema, DEFAULT_POLICY } from "./policy.mjs";
+import { DEFAULT_STATION, listStationCodes, stationExists, stationsHelp } from "./stations.mjs";
 
-/** Escales connues (fiches `data/stations/` livrées en phase 2). */
-export const KNOWN_STATIONS = ["BKK", "CDG", "NOU"];
+/**
+ * C1 — escales acceptées : le répertoire `data/stations/` fait foi, pas une liste
+ * figée dans le code. Le cas nominal d'un déroutement est une escale IMPRÉVUE : une
+ * fiche déposée sur disque doit être acceptée sans toucher au code.
+ *
+ * `KNOWN_STATIONS` reste exporté (et non vide, pour les appelants qui en font un
+ * `z.enum` — `lib/inventaire.mjs`) mais il est désormais RELEVÉ À L'IMPORT : il
+ * photographie le disque au démarrage. La validation d'un scénario, elle, passe par
+ * `stationCodeSchema()` qui relit le disque À CHAQUE parse.
+ */
+export const KNOWN_STATIONS = (() => {
+  const codes = listStationCodes();
+  return codes.length ? codes : [DEFAULT_STATION];
+})();
+
+/**
+ * Schéma d'un code escale : 3 lettres IATA (normalisées en majuscules) ET fiche
+ * présente. Le message d'erreur dit ce qui est disponible et comment ajouter une
+ * escale — jamais un repli silencieux sur BKK.
+ * @param {{dir?: string}} [opts] répertoire de fiches (défaut : `data/stations/`)
+ */
+export function stationCodeSchema({ dir } = {}) {
+  const where = dir ? { dir } : {};
+  return z
+    .string()
+    .transform((s) => String(s).trim().toUpperCase())
+    .superRefine((code, ctx) => {
+      if (!/^[A-Z]{3}$/.test(code)) {
+        ctx.addIssue({ code: "custom", message: `code escale « ${code} » invalide : un code IATA s'écrit en 3 lettres majuscules (ex. BKK) — ${stationsHelp(where)}` });
+        return;
+      }
+      if (!stationExists(code, where)) {
+        ctx.addIssue({ code: "custom", message: `escale ${code} sans fiche escale — ${stationsHelp(where)}` });
+      }
+    });
+}
 
 export const DEFAULT_AVION = {
   nom: "A350-900",
@@ -33,25 +68,40 @@ const AvionSchema = z.object({
   }),
 });
 
-const ScenarioSchema = z.object({
-  station: z.enum(KNOWN_STATIONS).default(DEFAULT_SCENARIO.station),
-  checkin: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().default(null),
-  nights: z.number().int().min(1).max(7).default(1),
-  seed: z.number().int().min(0).default(42),
-  simulate: z.boolean().default(false),
-  force_discovery: z.boolean().default(false),
-  next_update_minutes: z.number().int().min(5).max(240).default(30),
-});
+/** Schéma de scénario, lié à un répertoire de fiches escale (défaut : le livré). */
+export function scenarioSchemaFor({ dir } = {}) {
+  return z.object({
+    station: stationCodeSchema({ dir }).default(DEFAULT_SCENARIO.station),
+    checkin: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().default(null),
+    nights: z.number().int().min(1).max(7).default(1),
+    seed: z.number().int().min(0).default(42),
+    simulate: z.boolean().default(false),
+    force_discovery: z.boolean().default(false),
+    next_update_minutes: z.number().int().min(5).max(240).default(30),
+  });
+}
 
-const RunConfigSchema = z.object({
-  policy: PolicySchema,
-  avion: AvionSchema,
-  scenario: ScenarioSchema,
-});
+/** Schéma de configuration de run, lié au même répertoire de fiches. */
+export function runConfigSchemaFor({ dir } = {}) {
+  return z.object({
+    policy: PolicySchema,
+    avion: AvionSchema,
+    scenario: scenarioSchemaFor({ dir }),
+  });
+}
 
-/** Fusionne le payload de l'UI avec les défauts et valide le tout (nights 1-7, seed entier, station connue). */
-export function mergeConfig(payload = {}) {
-  return RunConfigSchema.parse({
+const RunConfigSchema = runConfigSchemaFor();
+
+/**
+ * Fusionne le payload de l'UI avec les défauts et valide le tout (nights 1-7, seed
+ * entier, escale fichée). `stationsDir` permet aux tests de viser un autre
+ * répertoire de fiches ; sans lui, comportement inchangé.
+ * @param {object} [payload]
+ * @param {{stationsDir?: string|null}} [opts]
+ */
+export function mergeConfig(payload = {}, { stationsDir = null } = {}) {
+  const schema = stationsDir ? runConfigSchemaFor({ dir: stationsDir }) : RunConfigSchema;
+  return schema.parse({
     policy: payload.policy ?? DEFAULT_POLICY,
     avion: payload.avion ?? DEFAULT_AVION,
     scenario: {
@@ -94,6 +144,54 @@ export function stationClock(now = new Date(), timezone = null) {
  * fait relever la nuit SUIVANTE dès que serveur et escale ne sont pas le même jour
  * (Nouméa UTC+11 ou Paris UTC+2 vs Bangkok UTC+7).
  */
+/**
+ * Decalage UTC de l'escale, en minutes, a l'instant donne (l'heure d'ete en depend).
+ *
+ * Sert a comparer un horaire de correspondance qui porte LUI-MEME un fuseau avec
+ * l'horloge murale de l'escale. Rend `null` quand le fuseau est absent ou inexploitable :
+ * on prefere ne pas comparer plutot que comparer faux.
+ *
+ * @param {Date} [now]
+ * @param {string|null} [timezone]
+ * @returns {number|null} minutes (ex. +420 pour Asia/Bangkok)
+ */
+export function stationOffsetMin(now = new Date(), timezone = null) {
+  if (!timezone) return null;
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "longOffset" });
+    const nom = fmt.formatToParts(now).find((x) => x.type === "timeZoneName")?.value ?? "";
+    const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(nom);
+    if (!m) return nom === "GMT" ? 0 : null;
+    const signe = m[1] === "-" ? -1 : 1;
+    return signe * (Number(m[2]) * 60 + Number(m[3] ?? 0));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Contexte d'escale attendu par `ingestPassagers({escale})` (PAXLIST v3).
+ *
+ * Sans lui, un horaire de correspondance donne en `HH:MM` seul reste indate et les deux
+ * controles de plausibilite (« anterieur a l'arrivee », « au-dela de 72 h ») ne tournent
+ * pas. L'heure d'arrivee du vol deroute est prise sur l'horloge de l'ESCALE, jamais sur
+ * celle du serveur : le poste qui lance le run n'est pas a Bangkok.
+ *
+ * @param {object|null} station fiche escale
+ * @param {Date} [now] instant de reference (injectable : testable)
+ * @returns {{code: string, timezone: string|null, arrivee_locale: string, offset_min: number|null}}
+ */
+export function contexteEscale(station, now = new Date()) {
+  const tz = station?.timezone ?? null;
+  const { date, heure } = stationClock(now, tz);
+  return {
+    code: station?.code ?? "",
+    timezone: tz,
+    arrivee_locale: heure ? `${date}T${heure}` : "",
+    offset_min: stationOffsetMin(now, tz),
+  };
+}
+
 export function resolveDates(scenario, now = new Date(), timezone = null) {
   const checkin = scenario.checkin ?? localDateIn(now, timezone);
   const d = new Date(`${checkin}T00:00:00`);

@@ -11,9 +11,12 @@ import { STATION_BKK } from "./helpers.mjs";
 const SCENARIO = { next_update_minutes: 30 };
 const NOW = new Date(2026, 9, 4, 21, 45); // 4 octobre 2026 21:45 locale
 
+// Ligne CERTAINE : stock mesuré, rien à confirmer, couchages suffisants. C'est la seule
+// forme qui autorise la variante affirmative « affecte ».
 const rowOk = {
   pnr: "SB001AAA", statut: "OK", provisoire: false, hotel: "Hyatt Regency BKK", hotel_url: "https://example.test/hyatt",
   mode_reglement: "compagnie",
+  stock_mesure: true, chambres_fermes: 1, chambres_a_confirmer: 0, couchages_insuffisants: false,
 };
 
 test("messages : un message par dossier, en FR et en EN, sans {{ résiduel (EX-MSG-1)", () => {
@@ -43,6 +46,22 @@ test("messages : 3 variantes — affecté, provisoire, escalade", () => {
   assert.match(byPnr("SB002BBB", "fr").body, /provisoire/i);
   assert.match(byPnr("SB003CCC", "en").body, /desk/i);
   assert.ok(byPnr("SB001AAA", "fr").body.includes("Hyatt Regency BKK"));
+});
+
+test("messages : une ligne OK adossée à du stock NON MESURÉ reçoit la variante provisoire, pas affecte", () => {
+  // Non-régression : `provisoire` est un drapeau de RUN, faux sur toutes les lignes en fin
+  // de run. La variante doit se choisir sur la certitude de la LIGNE, sinon 4 dossiers sur 5
+  // reçoivent « une chambre vous est attribuée » pour un stock que personne n'a compté.
+  const nonMesure = { ...rowOk, pnr: "SB010NNN", stock_mesure: false, chambres_fermes: 0, chambres_a_confirmer: 1 };
+  const aConfirmer = { ...rowOk, pnr: "SB011CCC", stock_mesure: true, chambres_fermes: 1, chambres_a_confirmer: 1 };
+  const sansCouchage = { ...rowOk, pnr: "SB012KKK", couchages_insuffisants: true };
+  const msgs = buildMessages([nonMesure, aConfirmer, sansCouchage], STATION_BKK, SCENARIO, DEFAULT_POLICY, { now: NOW });
+  for (const p of ["SB010NNN", "SB011CCC", "SB012KKK"]) {
+    const fr = msgs.find((m) => m.pnr === p && m.lang === "fr");
+    assert.equal(fr.variante, "provisoire", `${p} : variante attendue provisoire`);
+  }
+  // et aucune variante n'annonce une réservation faite ou en cours auprès de l'hôtel
+  for (const m of msgs) assert.ok(!/réservation est en cours de confirmation/i.test(m.body), m.pnr);
 });
 
 test("messages : le mode de règlement et les repas non renseignés (H-7) sont énoncés sans montant inventé", () => {

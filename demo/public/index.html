@@ -38,16 +38,55 @@
         <legend>Politique</legend>
         <div id="policy-cabins"></div>
         <details>
-          <summary>Chambrage et priorités</summary>
+          <summary>Chambrage</summary>
           <label>Unité familiale — adultes max
             <input id="f-fam-adults" type="number" min="1" max="4" step="1">
           </label>
           <label>Unité familiale — enfants max
             <input id="f-fam-children" type="number" min="0" max="4" step="1">
           </label>
-          <label>Priorités (ordre)
-            <input id="f-priorities" type="text" spellcheck="false">
+        </details>
+        <details id="pec-details">
+          <summary>Politique de prise en charge</summary>
+
+          <p class="pec-regle">
+            <strong>Rang</strong> = l'ordre de service : qui choisit sa chambre en premier.
+            <strong>Proximité</strong> = le droit aux hôtels proches : qui peut être envoyé loin.
+            Les deux sont indépendants — un rang élevé ne rapproche personne, et une proximité
+            stricte ne fait pas passer devant.
+          </p>
+          <p class="hint">
+            Le vrai garde-fou n'est ni l'un ni l'autre : c'est le <strong>budget de trajet</strong>
+            du dossier, calculé sur l'heure du vol suivant. C'est une contrainte dure — aucun rang
+            ne permet de l'outrepasser.
+          </p>
+
+          <div id="pec-criteres" class="pec-criteres"></div>
+          <p id="pec-incoherence" class="avert"></p>
+          <p id="pec-deprecie" class="hint"></p>
+
+          <label>Âge (révolu) en deçà duquel un enfant déclenche « bébé / bas âge »
+            <input id="f-pec-age" type="number" min="0" max="17" step="1">
           </label>
+          <label class="checkline"><input id="f-pec-elargir" type="checkbox">
+            Élargir à la couronne suivante quand la précédente ne suffit plus</label>
+
+          <h4 class="pec-h4">Correspondance — comment le budget de trajet se calcule</h4>
+          <label>Présentation à l'enregistrement avant le vol suivant (min)
+            <input id="f-corr-avance" type="number" min="0" max="600" step="5">
+          </label>
+          <label>Repos minimal utile à l'hôtel (min) — en deçà, escalade au comptoir
+            <input id="f-corr-repos" type="number" min="0" max="1440" step="15">
+          </label>
+          <label>Marge d'aléas : bus, file d'attente, bagages (min)
+            <input id="f-corr-marge" type="number" min="0" max="240" step="5">
+          </label>
+          <label>Seuil « correspondance serrée » (min)
+            <input id="f-corr-seuil" type="number" min="0" max="2880" step="30">
+          </label>
+
+          <h4 class="pec-h4">Couronnes déclarées par l'escale</h4>
+          <div id="pec-couronnes" class="pec-couronnes"></div>
         </details>
         <details>
           <summary>Règlement</summary>
@@ -138,13 +177,15 @@
     <section id="phases-frise" class="frise" aria-label="Phases du run"></section>
 
     <section id="banner" class="banner">
-      <div class="banner-item"><span class="b-label">coût agents</span><span id="b-cost" class="b-value">0,00 $</span></div>
-      <div class="banner-item"><span class="b-label">tokens</span><span id="b-tokens" class="b-value">0</span></div>
-      <div class="banner-item"><span class="b-label">pas</span><span id="b-steps" class="b-value">0</span></div>
+      <div class="banner-item"><span class="b-label">coût agents</span><span id="b-cost" class="b-value">—</span></div>
+      <div class="banner-item"><span class="b-label">tokens</span><span id="b-tokens" class="b-value">—</span></div>
+      <div class="banner-item"><span class="b-label">pas</span><span id="b-steps" class="b-value">—</span></div>
       <div class="banner-item"><span class="b-label">extension — sessions</span><span id="b-ext-sessions" class="b-value">—</span></div>
       <div class="banner-item"><span class="b-label">extension — coût</span><span id="b-ext-cost" class="b-value">—</span></div>
       <div class="banner-item"><span class="b-label">vague</span><span id="b-ext-wave" class="b-value">—</span></div>
       <div class="banner-item"><span class="b-label">durée</span><span id="b-elapsed" class="b-value">—</span></div>
+      <div class="banner-item"><span class="b-label">personnes logées</span><span id="b-pax" class="b-value">—</span></div>
+      <div class="banner-item"><span class="b-label">échéance (C5)</span><span id="b-deadline" class="b-value">—</span></div>
     </section>
 
     <section id="dry-run-panel" class="panel hidden">
@@ -167,11 +208,55 @@
       <div class="table-wrap">
         <table id="plan-table">
           <thead>
-            <tr><th>PNR</th><th>Cab.</th><th>Surcouches</th><th>File</th><th>Hôtel</th><th>Type de chambre</th><th>Ch.</th><th>Prix</th><th>Conformité</th><th>Règlement</th><th>Statut</th><th>Notes</th></tr>
+            <tr><th class="col-ecarter">Écarter</th><th>PNR</th><th>Cab.</th><th>Surcouches</th><th>File</th><th>Budget trajet</th><th>Hôtel</th><th>Couronne (trajet déclaré)</th><th>Type de chambre</th><th>Ch.</th><th>Pax</th><th>Prix</th><th>Stock</th><th>Créneau</th><th>Carte</th><th>Conformité</th><th>Règlement</th><th>Statut</th><th>Notes</th></tr>
           </thead>
           <tbody id="plan-body"></tbody>
         </table>
       </div>
+    </section>
+
+    <section id="validation-panel" class="panel hidden">
+      <h2>Validation humaine de la répartition <span id="c6-state" class="muted"></span></h2>
+
+      <p class="inv1-note">
+        <strong>Cette validation n'est pas une réservation.</strong>
+        L'outil ne réserve rien et ne contacte aucun hôtel (INV-1). Ce que vous validez ici est
+        le plan qu'il faut ensuite <strong>demander</strong> aux hôtels, par les appels et les
+        listes produits par le run. La « poursuite vers la confirmation de réservation » prévue
+        au cahier des charges engage juridiquement et financièrement la compagnie : c'est un
+        arbitrage client qui n'a pas été rendu, et aucun bouton de cet écran ne la déclenche.
+      </p>
+
+      <div id="c6-repartition" class="c6-grid"></div>
+
+      <h3 class="c6-h3">Répartition géographique — ce que vous signez aussi</h3>
+      <p class="hint">Les temps de trajet des couronnes sont <strong>déclarés par l'exploitation,
+        jamais mesurés</strong> : cet outil n'a aucun service de routage et ne convertit pas une
+        distance en durée. Un dossier n'est jamais logé dans une couronne dont le trajet déclaré
+        dépasse son budget de trajet.</p>
+      <div id="c6-couronnes"></div>
+
+      <div id="c6-reserves"></div>
+
+      <h3 class="c6-h3">Lignes écartées (validation partielle)</h3>
+      <p class="hint">Cochez « Écarter » dans le tableau du plan pour retirer une ligne de la
+        validation — un hôtel que vous refusez, un dossier que vous traitez autrement. Chaque
+        ligne écartée demande un motif : sans motif, la décision n'est pas traçable.</p>
+      <div id="c6-exclusions"></div>
+
+      <label class="c6-commentaire">Commentaire (facultatif, consigné au journal)
+        <textarea id="c6-commentaire" rows="2" spellcheck="false"></textarea>
+      </label>
+
+      <p id="c6-identite" class="hint"></p>
+      <p id="c6-empreinte" class="hint mono"></p>
+
+      <div class="run-row">
+        <button id="btn-valider" class="primary" type="button">Valider la répartition (sans réserver)</button>
+        <button id="btn-refuser" class="danger" type="button">Refuser la répartition</button>
+      </div>
+      <p id="validation-msg" class="hint" role="status"></p>
+      <div id="validation-journal"></div>
     </section>
 
     <section id="cost-panel" class="panel hidden">

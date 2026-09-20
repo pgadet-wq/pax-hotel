@@ -58,15 +58,20 @@ export function translateSessionEvent(ev) {
       break;
     case "MetricsUpdateEvent": {
       const m = d.metrics ?? {};
+      // `totalCost`, `steps` et `costPerModel` sont OPTIONNELS sur le flux. Une absence
+      // n'est PAS une dépense nulle : `?? 0` affichait « 0,00 $ » pendant que des sessions
+      // facturaient, et neutralisait la borne `max_cost_usd_per_run`, qui s'appuie sur ce
+      // même chiffre. `null` traverse maintenant jusqu'au bandeau (« non mesuré ») et
+      // jusqu'au budget, qui refuse de poursuivre ce qu'il ne peut pas contrôler.
+      const cpm = Array.isArray(m.costPerModel) ? m.costPerModel : null;
       out.push({
         type: "metrics",
         data: {
-          steps: m.steps ?? 0,
-          cost_usd: m.totalCost ?? 0,
-          tokens: (m.costPerModel ?? []).reduce(
-            (s, c) => s + (c.inputTokens ?? 0) + (c.outputTokens ?? 0) + (c.reasoningTokens ?? 0),
-            0,
-          ),
+          steps: m.steps ?? null,
+          cost_usd: m.totalCost ?? null,
+          tokens: cpm
+            ? cpm.reduce((s, c) => s + (c.inputTokens ?? 0) + (c.outputTokens ?? 0) + (c.reasoningTokens ?? 0), 0)
+            : null,
         },
       });
       break;

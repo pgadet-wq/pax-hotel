@@ -6,7 +6,7 @@ Outil de démonstration pour une compagnie aérienne : à partir d'une liste pas
 des agents web Holo (H Company, SDK `hai-agents`) relèvent des hôtels sur Booking et le code construit un plan
 d'hébergement par passager, avec conformité, mode de règlement, coût et messages FR/EN. Escale de démonstration : Bangkok (BKK).
 
-Dépôt : `https://github.com/pgadet-wq/pax-hotel.git`. Spécification complète : `docs/cdc/CAHIER_DES_CHARGES.md`. Journal d'état : `docs/cdc/ETAT.md`. Phases 0 à 7 : `docs/cdc/phases/`.
+Dépôt : `https://github.com/pgadet-wq/pax-hotel.git`. Spécification complète : `docs/cdc/CAHIER_DES_CHARGES.md` — **lire d'abord son §19 « Amendements datés »**, qui dit où le code a dépassé les sections d'origine (liste PAXLIST, 36 colonnes de plan, 9 livrables, validation humaine C6, rétention). Journal d'état : `docs/cdc/ETAT.md`. Phases 0 à 7 : `docs/cdc/phases/`.
 
 ## Règle de travail n° 1
 

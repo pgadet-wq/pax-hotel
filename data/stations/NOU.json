@@ -8,7 +8,30 @@
     "radius_km": 10,
     "distance_ref": "zone_center",
     "use_distance_filter": false,
-    "extra_nflt": []
+    "extra_nflt": [],
+    "couronnes": [
+      {
+        "rang": 1,
+        "rayon_m": 15000,
+        "trajet_min": 20,
+        "mode": "navette",
+        "note": "Tontouta et abords — pas d hôtel en aérogare"
+      },
+      {
+        "rang": 2,
+        "rayon_m": 45000,
+        "trajet_min": 50,
+        "mode": "navette",
+        "note": "Païta / La Tontouta élargie"
+      },
+      {
+        "rang": 3,
+        "rayon_m": 60000,
+        "trajet_min": 75,
+        "mode": "autocar",
+        "note": "Nouméa — trajet long déjà signalé par la fiche"
+      }
+    ]
   },
   "transfer": {
     "default_mode": "navette",
@@ -20,7 +43,9 @@
     "transit_hotel_airside": false,
     "notes": "Hôtels concentrés en centre-ville et baies : recherche par centre de zone, pas de filtre distance (EX-STA-2)."
   },
-  "pricing": { "price_cap_factor": 1.0 },
+  "pricing": {
+    "price_cap_factor": 1
+  },
   "fallback_hotels": [],
   "demo_priority": 3
 }

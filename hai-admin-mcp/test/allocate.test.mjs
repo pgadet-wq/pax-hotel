@@ -128,7 +128,11 @@ test("allocation : colonnes §5.7 — mode_reglement, hotel_source, provisoire, 
   assert.equal(row.hotel_source, "contracted");
   assert.equal(row.provisoire, true);
   assert.equal(row.session_ref, "sess-ctr");
-  assert.equal(row.transfert, "taxi, max 45 min");
+  // Le transfert reflète désormais la COURONNE retenue et nomme le temps comme DÉCLARÉ
+  // (chantier « politique de prise en charge » du 21/09/2026). La fiche escale de ce test
+  // ne déclare aucune couronne : `couronnesDe()` en dérive une unique à partir de
+  // `search.radius_km` / `transfer.max_transfer_min`, d'où le libellé ci-dessous.
+  assert.equal(row.transfert, "taxi, max 45 min déclarées (couronne unique dérivée de la fiche escale)");
   assert.equal(row.prix_total, 70 * 2); // nights appliqué
 });
 

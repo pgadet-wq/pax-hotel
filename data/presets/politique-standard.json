@@ -1,6 +1,6 @@
 {
   "name": "politique-standard",
-  "saved_at": "2026-09-15T00:00:00Z",
+  "saved_at": "2026-09-21T00:00:00Z",
   "policy": {
     "version": 2,
     "cabins": {
@@ -17,7 +17,14 @@
           "restaurant_late"
         ],
         "price_cap_eur": 250,
-        "allow_above_cap_if_no_alternative": true
+        "allow_above_cap_if_no_alternative": true,
+        "room_type_patterns": [
+          "suite",
+          "executive",
+          "club",
+          "deluxe",
+          "premium"
+        ]
       },
       "W": {
         "min_stars": 3,
@@ -30,7 +37,12 @@
           "airport_shuttle"
         ],
         "price_cap_eur": 130,
-        "allow_above_cap_if_no_alternative": true
+        "allow_above_cap_if_no_alternative": true,
+        "room_type_patterns": [
+          "superior",
+          "deluxe",
+          "premium"
+        ]
       },
       "Y": {
         "min_stars": 3,
@@ -43,7 +55,8 @@
           "breakfast_available"
         ],
         "price_cap_eur": 80,
-        "allow_above_cap_if_no_alternative": true
+        "allow_above_cap_if_no_alternative": true,
+        "room_type_patterns": []
       }
     },
     "global": {
@@ -54,13 +67,117 @@
         "W",
         "Y"
       ],
+      "prise_en_charge": {
+        "criteres": [
+          {
+            "cle": "correspondance_serree",
+            "actif": true,
+            "rang": 1,
+            "proximite": "stricte",
+            "departage": false
+          },
+          {
+            "cle": "medical",
+            "actif": true,
+            "rang": 2,
+            "proximite": "stricte",
+            "departage": false
+          },
+          {
+            "cle": "pmr",
+            "actif": true,
+            "rang": 3,
+            "proximite": "preferee",
+            "departage": false
+          },
+          {
+            "cle": "mineur_seul",
+            "actif": true,
+            "rang": 4,
+            "proximite": "preferee",
+            "departage": false
+          },
+          {
+            "cle": "bebe",
+            "actif": true,
+            "rang": 5,
+            "proximite": "preferee",
+            "departage": false
+          },
+          {
+            "cle": "famille",
+            "actif": true,
+            "rang": 6,
+            "proximite": "aucune",
+            "departage": false
+          },
+          {
+            "cle": "equipage",
+            "actif": true,
+            "rang": 7,
+            "proximite": "preferee",
+            "departage": false
+          },
+          {
+            "cle": "J",
+            "actif": true,
+            "rang": 8,
+            "proximite": "aucune",
+            "departage": false
+          },
+          {
+            "cle": "W",
+            "actif": true,
+            "rang": 9,
+            "proximite": "aucune",
+            "departage": false
+          },
+          {
+            "cle": "Y",
+            "actif": true,
+            "rang": 10,
+            "proximite": "aucune",
+            "departage": false
+          },
+          {
+            "cle": "groupe",
+            "actif": false,
+            "rang": 11,
+            "proximite": "aucune",
+            "departage": false
+          },
+          {
+            "cle": "sans_droit_entree",
+            "actif": true,
+            "rang": 12,
+            "proximite": "aucune",
+            "departage": false
+          },
+          {
+            "cle": "flying_blue",
+            "actif": true,
+            "rang": 99,
+            "proximite": "aucune",
+            "departage": true
+          }
+        ],
+        "age_bas_max": 6,
+        "elargir_si_insuffisant": true
+      },
+      "correspondance": {
+        "avance_avant_vol_min": 120,
+        "repos_minimal_min": 240,
+        "marge_min": 30,
+        "seuil_serree_min": 480
+      },
       "rooming": {
         "family_unit_max": {
           "adults": 2,
           "children": 2
         },
         "beyond": "two_rooms_same_hotel",
-        "infants_no_capacity": true
+        "infants_no_capacity": true,
+        "minor_alone_escalates": true
       },
       "overlays": {
         "pmr": {
@@ -83,7 +200,18 @@
         "n_socle": 8,
         "max_candidates": 10,
         "max_hotels_stage_b": 5,
-        "max_hotels_total": 10
+        "max_hotels_total": 10,
+        "radius_m": null,
+        "apply_amenity_filters": true,
+        "apply_price_filter": false
+      },
+      "presentation": {
+        "enabled": true,
+        "debut": null,
+        "delai_min": 30,
+        "pas_minutes": 15,
+        "par_creneau": null,
+        "fenetre_minutes": 120
       },
       "negotiated_rates": false,
       "currency": "EUR",
@@ -101,7 +229,11 @@
           "nuit",
           "repas",
           "transport"
-        ]
+        ],
+        "per": "dossier",
+        "marge_eur": 0,
+        "arrondi_eur": 10,
+        "plafond_eur": null
       }
     },
     "extension": {
@@ -111,17 +243,26 @@
       "max_waves": 4,
       "max_sessions_per_run": 18,
       "max_cost_usd_per_run": 10,
-      "probe_no_rooms_max": 30
+      "probe_no_rooms_max": 30,
+      "max_minutes_per_run": 45,
+      "hotel_cap_without_probe": 20,
+      "room_qty_sane_max": 60,
+      "rediscover_on_exhaustion": true
     },
     "agents": {
       "concurrency": "auto",
       "stagger_ms": 10000,
-      "model_stage_ab": "auto",
-      "model_probe": "auto"
+      "model_stage_ab": "holo3-122b-a10b",
+      "model_probe": "holo3-1-35b-a3b"
     },
     "inventory": {
       "max_age_days": 30,
-      "min_candidates_per_tier": 2
+      "min_candidates_per_tier": 2,
+      "decide_on_measured_capacity": true
+    },
+    "retention": {
+      "nominative_hours": 72,
+      "purge_on_start": true
     }
   }
 }

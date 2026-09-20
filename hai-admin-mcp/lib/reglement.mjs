@@ -2,6 +2,10 @@
  * Mode de règlement par hôtel (EX-ALL-6) et règle `company_payment_possible`
  * (EX-INV-4, hypothèse H-1 validée le 14/09 — signalée dans ETAT.md).
  * Modules purs : aucune estimation, aucun défaut silencieux au-delà des règles CDC.
+ *
+ * C7 : la carte prépayée est un MODE VOULU, pas un repli subi. `policy.payment.default_mode`
+ * commande la décision ; `company_payment_possible` ne sert plus qu'à trancher le cas
+ * `default_mode = "compagnie"` et à documenter le cas carte.
  */
 
 /**
@@ -27,19 +31,69 @@ export function companyPaymentPossible(hotel = {}) {
 }
 
 /**
- * Mode de règlement d'une ligne du plan (EX-ALL-6) :
- * `compagnie` si `company_payment_possible = "oui"` ; `carte_prepayee` si `"non"` et
- * carte activée ; `compagnie_a_confirmer` si `"a_confirmer"`. Carte désactivée et
- * paiement impossible → escalade DESK motif « règlement ».
+ * Seule exception au mode carte : l'hôtel est CONTRACTÉ **et** le prépaiement en ligne
+ * est confirmé — la chambre est alors déjà réglée par la compagnie à la réservation, et
+ * charger une carte par-dessus reviendrait à payer deux fois. Les deux conditions sont
+ * exigées : `prepayment_online = "oui"` sans contrat dit seulement que la compagnie
+ * *pourrait* payer, pas qu'elle l'a fait ; un contrat sans prépaiement laisse le
+ * règlement à faire au comptoir, ce que la carte du passager couvre précisément.
+ * Un `company_payment_possible` pré-calculé (inventaire.mjs) ne suffit pas : il agrège
+ * les deux cas et ne dit pas lequel s'applique.
+ *
+ * @param {object} hotel voir companyPaymentPossible()
+ * @returns {boolean}
+ */
+function dejaRegleParLaCompagnie(hotel = {}) {
+  return hotel.contracted === true && (hotel.payment ?? {}).prepayment_online === "oui";
+}
+
+/** Décision historique (`default_mode = "compagnie"`) : le paiement compagnie d'abord. */
+function modeCompagnieDabord(cpp, carteActive) {
+  if (cpp === "oui") return { mode: "compagnie", escalade: false, source: "paiement_compagnie" };
+  if (cpp === "a_confirmer") return { mode: "compagnie_a_confirmer", escalade: false, source: "paiement_compagnie" };
+  if (carteActive) return { mode: "carte_prepayee", escalade: false, source: "repli_carte" };
+  return { mode: null, escalade: true, motif: "règlement", source: "aucun_moyen" };
+}
+
+/**
+ * Mode de règlement d'une ligne du plan (EX-ALL-6, C7).
+ *
+ * `policy.payment.default_mode = "carte_prepayee"` (mode nominal client) : la ligne sort en
+ * `carte_prepayee` quel que soit `company_payment_possible`, sauf hôtel contracté déjà
+ * prépayé en ligne (voir dejaRegleParLaCompagnie) qui reste en `compagnie`. Carte désactivée
+ * alors que la politique la désigne : incohérence signalée par `avertissement`, repli
+ * explicite sur la décision `compagnie` — jamais un basculement muet.
+ *
+ * `default_mode = "compagnie"` : comportement historique inchangé (compagnie si possible,
+ * carte en repli, escalade DESK motif « règlement » si la carte est désactivée).
  *
  * @param {object} hotel voir companyPaymentPossible()
  * @param {object} policy politique validée (policy.payment)
- * @returns {{mode: "compagnie"|"carte_prepayee"|"compagnie_a_confirmer"|null, escalade: boolean, motif?: string}}
+ * @returns {{mode: "compagnie"|"carte_prepayee"|"compagnie_a_confirmer"|null, escalade: boolean,
+ *            motif?: string, source: string, company_payment_possible: string, avertissement?: string}}
  */
 export function modeReglement(hotel, policy) {
   const cpp = companyPaymentPossible(hotel);
-  if (cpp === "oui") return { mode: "compagnie", escalade: false };
-  if (cpp === "a_confirmer") return { mode: "compagnie_a_confirmer", escalade: false };
-  if (policy.payment.prepaid_card.enabled) return { mode: "carte_prepayee", escalade: false };
-  return { mode: null, escalade: true, motif: "règlement" };
+  const paiement = policy.payment ?? {};
+  const carteActive = paiement.prepaid_card?.enabled === true;
+  const base = { company_payment_possible: cpp };
+
+  if (paiement.default_mode === "carte_prepayee") {
+    if (!carteActive) {
+      return {
+        ...base,
+        ...modeCompagnieDabord(cpp, false),
+        source: "politique_incoherente",
+        avertissement:
+          "payment.default_mode = carte_prepayee mais payment.prepaid_card.enabled = false — " +
+          "repli sur le règlement compagnie, aucune carte ne sera émise",
+      };
+    }
+    if (dejaRegleParLaCompagnie(hotel)) {
+      return { ...base, mode: "compagnie", escalade: false, source: "prepaiement_en_ligne_contracte" };
+    }
+    return { ...base, mode: "carte_prepayee", escalade: false, source: "mode_nominal" };
+  }
+
+  return { ...base, ...modeCompagnieDabord(cpp, carteActive) };
 }

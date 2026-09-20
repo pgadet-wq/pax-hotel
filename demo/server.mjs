@@ -17,19 +17,24 @@ import * as nodeCrypto from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_POLICY, PolicySchema, effectiveCaps, AMENITY_KEYS, AMENITY_LABELS } from "../hai-admin-mcp/lib/policy.mjs";
-import { DEFAULT_AVION, DEFAULT_SCENARIO, mergeConfig, resolveDates, stationClock } from "../hai-admin-mcp/lib/scenario.mjs";
-import { loadStation, listStations } from "../hai-admin-mcp/lib/stations.mjs";
+import {
+  DEFAULT_POLICY, PolicySchema, effectiveCaps, AMENITY_KEYS, AMENITY_LABELS,
+  CRITERE_KEYS, CRITERE_LABELS, CRITERES_DEFAUT,
+} from "../hai-admin-mcp/lib/policy.mjs";
+import { DEFAULT_AVION, DEFAULT_SCENARIO, mergeConfig, resolveDates, stationClock, contexteEscale } from "../hai-admin-mcp/lib/scenario.mjs";
+import { loadStation, listStations, couronnesDe } from "../hai-admin-mcp/lib/stations.mjs";
 import { loadInventaire, normalizeInventaire, isStale, candidatesFrom, slugify, capaciteIndicative, INVENTAIRE_DIR } from "../hai-admin-mcp/lib/inventaire.mjs";
 import { generatePassengers } from "../hai-admin-mcp/lib/passagers.mjs";
 import { ingestPassagers, IngestError } from "../hai-admin-mcp/lib/paxlist.mjs";
-import { buildDossiers, computeNeeds } from "../hai-admin-mcp/lib/dossiers.mjs";
+import {
+  buildDossiers, computeNeeds, avertissementsDe, chambresHorsPortee, FILE_REPLI, FILE_REPLI_LABEL,
+} from "../hai-admin-mcp/lib/dossiers.mjs";
 import { allocate } from "../hai-admin-mcp/lib/allocate.mjs";
 import { computeCost } from "../hai-admin-mcp/lib/cout.mjs";
 import { preflightUrls } from "../hai-admin-mcp/lib/preflight.mjs";
 import { discoveryNeeded } from "../hai-admin-mcp/lib/discovery.mjs";
 import { planExtension } from "../hai-admin-mcp/lib/capacite.mjs";
-import { buildHotelUrl } from "../hai-admin-mcp/lib/hai-urls.mjs";
+import { buildHotelUrl, buildSearchPlan, HYPOTHESE_FILTRE_PRIX, NFLT_CODES_RELEVES_LE } from "../hai-admin-mcp/lib/hai-urls.mjs";
 import { realCollect } from "../hai-admin-mcp/lib/pipeline.mjs";
 import { createHub } from "./sse-hub.mjs";
 import { createRunManager, HttpError } from "./run-manager.mjs";
@@ -107,7 +112,9 @@ export function createDemoServer(opts = {}) {
     ...(opts.dirs ?? {}),
   };
   const hub = opts.hub ?? createHub();
-  const manager = createRunManager({ hub, outDir: dirs.outDir });
+  // `policy` sert UNIQUEMENT ici à `retention.purge_on_start` : chaque run purge ensuite
+  // selon SA propre politique.
+  const manager = createRunManager({ hub, outDir: dirs.outDir, policy: DEFAULT_POLICY });
   const invRefresher = createInventaireRefresher({ hub, inventaireDir: dirs.inventaireDir });
   let uploadedRows = null; // dernière liste passagers téléversée (mémoire process)
   let uploadedInfo = null; // résumé d'ingestion exposé à l'UI (jamais nominatif)
@@ -144,6 +151,11 @@ export function createDemoServer(opts = {}) {
     sendJson(res, 200, {
       defaults: { policy: DEFAULT_POLICY, avion: DEFAULT_AVION, scenario: DEFAULT_SCENARIO },
       amenities: { keys: AMENITY_KEYS, labels: AMENITY_LABELS },
+      // POLITIQUE DE PRISE EN CHARGE : le vocabulaire des cases à cocher, servi par le
+      // serveur pour que l'interface n'en recopie jamais une version divergente. `rang`
+      // (ordre de service) et `proximite` (droit aux couronnes proches) sont DEUX
+      // réglages distincts — l'interface doit le dire à l'écran.
+      prise_en_charge: { keys: CRITERE_KEYS, labels: CRITERE_LABELS, defaut: CRITERES_DEFAUT },
       stations: listStations().map((s) => ({
         code: s.code,
         name: s.name,
@@ -151,6 +163,11 @@ export function createDemoServer(opts = {}) {
         search: s.search,
         transfer: s.transfer,
         pricing: s.pricing,
+        timezone: s.timezone,
+        // COURONNES effectives : `source: "declaree"` = l'exploitation les a fichées,
+        // `"derivee"` = repli calculé sur le rayon, qui n'est PAS une déclaration.
+        // Les `trajet_min` sont DÉCLARÉS, jamais mesurés (aucun service de routage ici).
+        couronnes: couronnesDe(s),
       })),
       presets: listPresets(),
       sim_stations: SIM_STATIONS,
@@ -246,6 +263,98 @@ export function createDemoServer(opts = {}) {
     sendJson(res, 200, { inventaire: normalized, stale: isStale(normalized, DEFAULT_POLICY) });
   }
 
+  /**
+   * Couverture de repli si le moteur n'en rend pas (version de `discovery.mjs`
+   * antérieure au contrat de vague 2) : même forme, et un avertissement NOMMÉ
+   * plutôt qu'un chiffre qui aurait l'air officiel.
+   */
+  function couvertureDeRepli(needs, candidates) {
+    const demandees = ["J", "W", "Y"].reduce((n, t) => n + (needs.parTier[t]?.chambres ?? 0), 0);
+    const cap = capaciteIndicative(candidates);
+    return {
+      hotels: cap.hotels, indicatives: cap.total, relevees: cap.connue, supposees: cap.estimee,
+      demandees, suffisante: demandees <= 0 ? true : cap.total >= demandees,
+      avertissement: "couverture recalculée par le serveur : le moteur de découverte ne l'a pas rendue",
+    };
+  }
+
+  /**
+   * Plan de recherche C1 : les URLs réellement envoyées, passe par passe, avec
+   * les filtres appliqués, ceux qui ne sont PAS filtrables, le rayon réellement
+   * transmis et l'hypothèse de syntaxe du filtre de prix. Fonction pure, aucun réseau.
+   */
+  function planDeRecherche({ policy, station, checkin, checkout, needs }) {
+    try {
+      // la passe PMR n'est demandée que si des dossiers PMR existent réellement
+      // (file « pmr » de computeNeeds) ; sinon `null` = selon l'overlay de politique
+      // `parCritere` et non `parFile` : un PMR servi en file « correspondance_serree »
+      // reste un PMR, et la recherche doit lui chercher une chambre accessible. La
+      // lecture par file le manquait dès que la correspondance passait devant.
+      const pmr = (needs?.parCritere?.pmr?.dossiers ?? needs?.parFile?.pmr?.dossiers ?? 0) > 0 ? true : null;
+      const plan = buildSearchPlan({ policy, station, checkin, checkout, needs: needs.parTier, pmr });
+      return { ...plan, hypothese_prix: HYPOTHESE_FILTRE_PRIX, codes_releves_le: plan.codes_releves_le ?? NFLT_CODES_RELEVES_LE };
+    } catch (err) {
+      // une URL non constructible est une information d'exploitation, pas une panne du dry-run
+      return { erreur: `plan de recherche non constructible : ${String(err?.message ?? err)}`, passes: [] };
+    }
+  }
+
+  /**
+   * Horloge de l'escale, sous les DEUX formes que `buildDossiers` sait recouper :
+   * l'instant absolu (`maintenant`) et l'horloge MURALE de l'escale (`maintenantLocal`),
+   * cadre de `heure_correspondance`. Sans elles, aucun budget de trajet n'est calculé et
+   * aucune correspondance n'est protégée — c'est le câblage, pas une option d'affichage.
+   * @returns {{horloge: object, maintenant: Date, maintenantLocal: string|null}}
+   */
+  function horlogeEscale(station, now = new Date()) {
+    const horloge = stationClock(now, station.timezone);
+    // heure vide = fuseau refusé par Intl : on ne fabrique pas une horloge murale fausse
+    const maintenantLocal = horloge.heure ? `${horloge.date}T${horloge.heure}` : null;
+    return { horloge, maintenant: now, maintenantLocal };
+  }
+
+  /**
+   * Ce que la POLITIQUE DE PRISE EN CHARGE produit réellement sur cette liste : quels
+   * critères sont cochés, combien de dossiers chacun attrape, combien de chambres doivent
+   * rester proches, et ce que chaque couronne DÉCLARÉE laisse hors de portée.
+   *
+   * Aucun temps de trajet n'est mesuré ici : les `trajet_min` des couronnes sont des
+   * déclarations d'exploitation, et l'interface doit les présenter comme telles.
+   */
+  function lecturePriseEnCharge({ policy, station, dossiers, needs }) {
+    const pec = policy.global.prise_en_charge ?? { criteres: [], age_bas_max: 6, elargir_si_insuffisant: true };
+    const { couronnes, source } = couronnesDe(station);
+    const criteres = [...(pec.criteres ?? [])]
+      .sort((a, b) => a.rang - b.rang || String(a.cle).localeCompare(String(b.cle)))
+      .map((c) => ({
+        ...c,
+        libelle: CRITERE_LABELS[c.cle] ?? c.cle,
+        // `parCritere` compte les critères SATISFAITS, pas seulement ceux qui ont donné
+        // la file : c'est le chiffre qui dit ce que la case à cocher change vraiment.
+        satisfait: needs.parCritere?.[c.cle] ?? null,
+        file: needs.parFile?.[c.cle] ?? null,
+      }));
+    return {
+      criteres,
+      age_bas_max: pec.age_bas_max,
+      elargir_si_insuffisant: pec.elargir_si_insuffisant,
+      correspondance: policy.global.correspondance ?? null,
+      // file de repli : les dossiers qu'aucune case cochée n'attrape
+      repli: { cle: FILE_REPLI, libelle: FILE_REPLI_LABEL, besoins: needs.parFile?.[FILE_REPLI] ?? null },
+      couronnes: {
+        source,
+        liste: couronnes.map((c) => ({
+          rang: c.rang, rayon_m: c.rayon_m, trajet_min_declare: c.trajet_min, mode: c.mode, note: c.note,
+          // ce que cette couronne ne peut PAS accueillir, budgets de trajet en main
+          hors_portee: chambresHorsPortee(needs, c.trajet_min),
+        })),
+      },
+      trajet: needs.parTrajet ?? null,
+      total: needs.total ?? null,
+      avertissements: avertissementsDe(dossiers),
+    };
+  }
+
   /** Dry-run synchrone (aucun agent) : besoins, inventaire, décision, URLs, extension théorique. */
   function dryRun({ policy, avion, scenario }, body = {}) {
     const station = loadStation(scenario.station);
@@ -253,7 +362,10 @@ export function createDemoServer(opts = {}) {
     // la source de liste vient de la RACINE du corps : `ScenarioSchema` ne déclare pas
     // `passengers`, zod la supprimerait du scénario (le dry-run partirait sur la liste générée)
     const rows = uploadedRowsFor(body) ?? generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" }).rows;
-    const dossiers = buildDossiers(rows, policy);
+    // HEURE DE L'ESCALE injectée : sans elle, `trajet_max_min` reste null partout et le
+    // dry-run annoncerait « aucune contrainte de distance » pour tout le monde.
+    const { horloge, maintenant, maintenantLocal } = horlogeEscale(station);
+    const dossiers = buildDossiers(rows, policy, { maintenant, maintenantLocal });
     const needs = computeNeeds(dossiers);
     const inv = loadInventaire(station.code, { dir: dirs.inventaireDir });
     const decision = discoveryNeeded({ inv, policy, station, needs: needs.parTier, force: scenario.force_discovery });
@@ -272,12 +384,29 @@ export function createDemoServer(opts = {}) {
       passagers: rows.length, dossiers: dossiers.length,
       source_liste: uploadedRowsFor(body) ? "téléversée" : "générée",
       uploaded: uploadedInfo,
-      heure_escale: stationClock(new Date(), station.timezone),
-      couverture: (() => {
-        const besoin = ["J", "W", "Y"].reduce((n, t) => n + (needs.parTier[t]?.chambres ?? 0), 0);
-        const cap = capaciteIndicative(candidates);
-        return { besoin_chambres: besoin, ...cap, suffisant: cap.total >= besoin };
-      })(),
+      heure_escale: horloge,
+      // POLITIQUE DE PRISE EN CHARGE : les cases cochées, ce qu'elles attrapent, les
+      // couronnes DÉCLARÉES de l'escale et ce qu'elles laissent hors de portée.
+      prise_en_charge: lecturePriseEnCharge({ policy, station, dossiers, needs }),
+      // C2 — la couverture est celle que le MOTEUR a jugée (`discoveryNeeded`), pas une
+      // seconde arithmétique parallèle qui pourrait diverger de la décision affichée.
+      // `supposees` = hôtels sans indice de capacité comptés au plafond d'affichage :
+      // une hypothèse de cadrage, jamais une mesure — l'écran doit le dire.
+      couverture: decision.couverture ?? couvertureDeRepli(needs, candidates),
+      // C1/§6 — l'URL de recherche RÉELLEMENT construite, ce qui est filtré et ce qui
+      // ne peut PAS l'être : l'opérateur ne doit plus payer à l'aveugle.
+      recherche: planDeRecherche({ policy, station, checkin, checkout, needs }),
+      // C5 — la seule borne d'horloge que le run appliquera vraiment.
+      bornes: {
+        minutes_max: policy.extension?.max_minutes_per_run ?? null,
+        sessions_max: policy.extension?.max_sessions_per_run ?? null,
+        cout_max_usd: policy.extension?.max_cost_usd_per_run ?? null,
+        vagues_max: policy.extension?.max_waves ?? null,
+        note_duree:
+          "durée ESTIMÉE non calculée ici : la seule base de mesure du dépôt est MESURES_REELLES " +
+          "dans hai-admin-mcp/tools/rebooking-v2.mjs, que demo/ ne peut pas importer (INV-7). " +
+          "Pour une estimation chiffrée : node hai-admin-mcp/tools/rebooking-v2.mjs --dry-run",
+      },
       caps: effectiveCaps(policy, station),
       needs: needs.parTier,
       inventaire: { hotels: inv?.hotels?.length ?? 0, updated_at: inv?.updated_at ?? null, stale: isStale(inv, policy) },
@@ -406,7 +535,10 @@ export function createDemoServer(opts = {}) {
     }
     const rows = uploadedRowsFor(body) ?? generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" }).rows;
     const t0 = Date.now();
-    const dossiers = buildDossiers(rows, policy);
+    // même câblage que le dry-run : sans l'heure de l'escale, le rejeu hors ligne
+    // montrerait un plan sans aucun budget de trajet, donc sans la protection qu'on rejoue
+    const { maintenant, maintenantLocal } = horlogeEscale(station);
+    const dossiers = buildDossiers(rows, policy, { maintenant, maintenantLocal });
     const alloc = allocate({ dossiers, inventories, policy, station, nights: scenario.nights, provisoire: false });
     const cost = computeCost(alloc.plan, policy, scenario, { avion, station });
     return sendJson(res, 200, {
@@ -420,6 +552,8 @@ export function createDemoServer(opts = {}) {
       caps: effectiveCaps(policy, station),
       summary: alloc.summary,
       gaps: alloc.gaps,
+      // politique incohérente, horaires illisibles, horloge d'escale absente : jamais tus
+      avertissements_politique: avertissementsDe(dossiers),
       cost,
       hotels: [...new Set(alloc.plan.filter((r) => r.statut === "OK").map((r) => r.hotel))].length,
       note: "rejeu hors ligne sur les relevés déjà payés — aucune session d'agent, 0 $",
@@ -545,6 +679,115 @@ export function createDemoServer(opts = {}) {
     fs.createReadStream(file).pipe(res);
   }
 
+  /* ------------------------------------------- validation humaine (C6) */
+
+  /**
+   * En-têtes d'identité qu'un reverse proxy authentifiant pose habituellement.
+   * Le serveur n'authentifie PERSONNE : il reprend ce que le proxy lui donne et,
+   * s'il n'a rien, il l'écrit noir sur blanc dans le journal. Aucune
+   * authentification n'est bricolée ici — ce serait une fausse traçabilité.
+   */
+  const ENTETES_IDENTITE = [
+    "x-forwarded-user",
+    "x-forwarded-email",
+    "x-forwarded-preferred-username",
+    "x-auth-request-user",
+    "x-auth-request-email",
+    "x-remote-user",
+    "remote-user",
+  ];
+
+  /**
+   * Proxys d'identité DÉCLARÉS de confiance par l'exploitant, via `DEMO_TRUSTED_PROXY` :
+   * une liste d'adresses séparées par des virgules, ou `any` quand le serveur n'est
+   * joignable QUE par son proxy. Vide par défaut.
+   *
+   * Sans cette déclaration, un en-tête d'identité n'est qu'une AFFIRMATION du client :
+   * n'importe qui joignant le serveur en direct peut poser `x-forwarded-user`. Le tenir
+   * pour une authentification donnerait au journal de validation une valeur probante
+   * qu'il n'a pas — c'est exactement le genre de chiffre rassurant non mérité que ce
+   * projet refuse. Lu à CHAQUE requête : la configuration d'exploitation peut changer
+   * sans redémarrer une démo.
+   * @param {string|null} remote adresse d'origine de la requête
+   * @returns {boolean} vrai seulement si l'exploitant a déclaré ce proxy de confiance
+   */
+  function proxyDeConfiance(remote) {
+    const brut = String(process.env.DEMO_TRUSTED_PROXY ?? "").trim();
+    if (!brut) return false;
+    const liste = brut.split(",").map((x) => x.trim()).filter(Boolean);
+    if (liste.some((x) => x.toLowerCase() === "any" || x === "1")) return true;
+    if (!remote) return false;
+    // ::ffff:10.0.0.2 et 10.0.0.2 désignent la même machine
+    const nu = remote.replace(/^::ffff:/i, "");
+    return liste.some((x) => x === remote || x === nu);
+  }
+
+  /**
+   * Identité du validateur telle qu'un proxy la fournit — ou l'absence, dite.
+   * `declaree` : un en-tête d'identité a été reçu. `authentifiee` : ET il vient d'un
+   * proxy déclaré de confiance. Les deux sont distingués parce qu'ils n'ont pas la
+   * même valeur devant un litige.
+   */
+  function validateurDe(req) {
+    const remote = req.socket?.remoteAddress ?? null;
+    for (const h of ENTETES_IDENTITE) {
+      const v = req.headers[h];
+      if (typeof v === "string" && v.trim()) {
+        const confiance = proxyDeConfiance(remote);
+        return {
+          identite: v.trim().slice(0, 200),
+          source: `en-tête ${h}`,
+          declaree: true,
+          authentifiee: confiance,
+          proxy_de_confiance: confiance,
+          remote,
+        };
+      }
+    }
+    return { identite: null, source: "aucune", declaree: false, authentifiee: false, proxy_de_confiance: false, remote };
+  }
+
+  const RUNID_RE = /^[A-Za-z0-9._-]{1,80}$/;
+
+  /**
+   * POST /api/validation — enregistre la décision humaine sur la répartition (C6).
+   *
+   * INV-1 : cette route NE RÉSERVE RIEN. Elle consigne ce que le validateur
+   * accepte de demander aux hôtels. La « poursuite vers la confirmation de
+   * réservation » du CDC est un arbitrage client non rendu : elle n'existe pas
+   * dans cet outil, et l'écran le dit.
+   */
+  function postValidation(req, body, res) {
+    const runId = String(body.runId ?? "").trim();
+    if (!RUNID_RE.test(runId)) throw new HttpError(400, "runId manquant ou invalide");
+    const entree = manager.valider({
+      runId,
+      decision: String(body.decision ?? ""),
+      empreinte: body.empreinte ? String(body.empreinte) : null,
+      exclusions: Array.isArray(body.exclusions) ? body.exclusions : [],
+      validateur: validateurDe(req),
+      commentaire: body.commentaire,
+    });
+    return sendJson(res, 200, {
+      enregistre: true,
+      journal: `validation-${runId}.json`,
+      entree,
+      // aucune ambiguïté à la sortie de l'appel non plus
+      suite: "aucune réservation n'a été faite : ce plan validé est ce qu'il faut maintenant DEMANDER aux hôtels",
+    });
+  }
+
+  /** GET /api/validation?runId= — journal append-only + empreinte du plan courant. */
+  function getValidation(query, res) {
+    const runId = String(query.get("runId") ?? "").trim();
+    if (!RUNID_RE.test(runId)) throw new HttpError(400, "runId manquant ou invalide");
+    return sendJson(res, 200, {
+      runId,
+      empreinte_plan: manager.empreinteDe(runId),
+      journal: manager.journalValidation(runId),
+    });
+  }
+
   /* --------------------------------------------------------------- routage */
 
   const server = http.createServer(async (req, res) => {
@@ -582,9 +825,21 @@ export function createDemoServer(opts = {}) {
         }
         case "POST /api/passengers": {
           const bytes = await readBody(req, { raw: true });
+          // v3 : le contexte d'escale date un horaire de correspondance donne en « HH:MM »
+          // seul et fait tourner les controles de plausibilite (PAXLIST §3.3ter). L'escale
+          // n'est pas encore arretee a l'upload : l'UI envoie celle qui est selectionnee,
+          // et un code inconnu retombe sur l'escale par defaut plutot que de refuser la
+          // liste — la correspondance est un CONFORT, l'ingestion ne doit pas en dependre.
+          let escale = null;
+          try {
+            const code = (url.searchParams.get("station") ?? DEFAULT_SCENARIO.station).toUpperCase();
+            escale = contexteEscale(loadStation(code), new Date());
+          } catch {
+            escale = null;
+          }
           let ing;
           try {
-            ing = ingestPassagers(bytes);
+            ing = ingestPassagers(bytes, escale ? { escale } : {});
           } catch (err) {
             if (err instanceof IngestError) {
               // liste REFUSÉE : le rapport part avec l'erreur pour que l'opérateur
@@ -627,6 +882,17 @@ export function createDemoServer(opts = {}) {
           return hub.handle(req, res, manager.snapshot);
         case "POST /api/replay":
           return postReplay(parseJson(await readBody(req)), res);
+        case "POST /api/validation":
+          return postValidation(req, parseJson(await readBody(req)), res);
+        case "GET /api/validation":
+          return getValidation(url.searchParams, res);
+        case "POST /api/retention-purge": {
+          // purge manuelle, sur le MÊME critère d'âge que la purge automatique
+          // sur la politique de rétention COURANTE (celle du dernier run lancé), jamais sur
+          // `DEFAULT_POLICY` : le seuil supprimé était un seuil que l'exploitant n'avait pas choisi
+          const bilan = manager.purgerNominatives(null, { raison: "demande explicite de l'opérateur" });
+          return sendJson(res, 200, bilan);
+        }
         case "GET /api/health":
           return await getHealth(res);
         case "GET /api/state":
@@ -636,6 +902,16 @@ export function createDemoServer(opts = {}) {
         case "GET /api/messages": {
           const r = manager.result(url.searchParams.get("runId"));
           if (!r) throw new HttpError(404, "runId inconnu");
+          // run restitué depuis le disque après redémarrage : les messages ne sont
+          // pas persistés (nominatifs). Le CSV du run, lui, l'est — on y renvoie
+          // plutôt que de rendre une liste vide qui passerait pour « 0 message ».
+          if (!Array.isArray(r.messages)) {
+            // ne renvoyer vers le CSV que s'il existe VRAIMENT : un run annulé n'en a
+            // jamais écrit, et l'annoncer enverrait l'opérateur chercher un fichier absent
+            const csv = `messages-${url.searchParams.get("runId")}.csv`;
+            const ou = r.outputs?.includes(csv) ? ` — télécharger ${csv}` : " — ce run n'a produit aucun fichier de messages";
+            throw new HttpError(410, `messages non chargés (run restitué après un redémarrage du serveur)${ou}`);
+          }
           const lang = url.searchParams.get("lang");
           const messages = lang ? r.messages.filter((m) => m.lang === lang) : r.messages;
           return sendJson(res, 200, { count: messages.length, messages });
@@ -643,6 +919,11 @@ export function createDemoServer(opts = {}) {
         case "GET /api/cout": {
           const r = manager.result(url.searchParams.get("runId"));
           if (!r) throw new HttpError(404, "runId inconnu");
+          if (!r.cost) {
+            const json = `cout-${url.searchParams.get("runId")}.json`;
+            const ou = r.outputs?.includes(json) ? ` — télécharger ${json}` : " — ce run n'a produit aucun coût consolidé (run annulé ou interrompu)";
+            throw new HttpError(410, `coût non chargé pour ce run${ou}`);
+          }
           return sendJson(res, 200, r.cost);
         }
         default:

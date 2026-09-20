@@ -96,7 +96,14 @@ test("run simulé complet : 202 → 409 pendant, snapshot, messages, coût, tél
   const state = await call("GET", "/api/state");
   assert.equal(state.data.state, "done");
   assert.equal(state.data.plan.length, 157);
-  assert.equal(state.data.outputs.length, 7); // + rooming-<runId>.csv (liste d'appel par hôtel)
+  // 9 livrables depuis l'ajout des fiches d'enregistrement (C3) : les 7 d'avant
+  // (plan, rapport, messages, rooming, coût, candidats, relevés) + fiches-<runId>.csv
+  // et fiches-<runId>.html. Le fichier d'état incrémental run-<runId>.state.json est
+  // écrit dans le même dossier mais n'est PAS un livrable (non téléchargeable).
+  assert.equal(state.data.outputs.length, 9);
+  assert.ok(state.data.outputs.includes(`fiches-${runId}.csv`), "fiches d'enregistrement CSV (C3)");
+  assert.ok(state.data.outputs.includes(`fiches-${runId}.html`), "fiches d'enregistrement HTML (C3)");
+  assert.ok(state.data.outputs.includes(`rooming-${runId}.csv`), "liste d'appel par hôtel");
 
   const fr = await call("GET", `/api/messages?runId=${runId}&lang=fr`);
   assert.equal(fr.data.count, 157);
@@ -114,6 +121,8 @@ test("run simulé complet : 202 → 409 pendant, snapshot, messages, coût, tél
   assert.match(plan.headers.get("content-disposition"), /attachment/);
   assert.equal((await call("GET", "/api/outputs/plan-fantome.csv")).status, 404);
   assert.equal((await call("GET", "/api/outputs/..%2fBKK.json")).status, 404);
+  // l'état incrémental est NOMINATIF et n'est pas un livrable : il ne se télécharge pas
+  assert.equal((await call("GET", `/api/outputs/run-${runId}.state.json`)).status, 404);
 
   // proxy captures : clés d'état, Cache-Control private, PNG réel
   const shot = await call("GET", "/api/screenshot?hotel=hyatt-regency-bkk-airport&seq=0");

@@ -1,1 +1,1 @@
-﻿pnr;nom;prenom;type_pax;cabine;categorie;statut_pax;assistance;droit_entree;destination_finale;chambres_demandees;flying_blue;groupe;age;email;telephone;vol;remarque
+﻿pnr;nom;prenom;type_pax;cabine;categorie;statut_pax;assistance;droit_entree;destination_finale;chambres_demandees;flying_blue;groupe;age;email;telephone;vol;remarque;classe_reservation;date_naissance;nationalite;passeport_num;passeport_exp;passeport_pays;sexe;adresse_domicile;vol_correspondance;heure_correspondance

@@ -16,6 +16,81 @@ export const DEFAULT_STATION = "BKK";
 /** Répertoire des fiches livrées (résolu depuis ce fichier, jamais le cwd). */
 export const STATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "stations");
 
+/** Nom de fiche valide : un code IATA sur 3 lettres majuscules. */
+const FICHIER_FICHE = /^[A-Z]{3}\.json$/;
+
+/**
+ * Codes des fiches présentes sur disque, SANS charger ni valider leur contenu : une
+ * fiche cassée n'empêche pas d'énumérer les autres (c'est `loadStation()` qui dira
+ * pourquoi elle est cassée). Répertoire absent = liste vide, jamais une erreur :
+ * l'appelant qui a besoin des fiches complètes utilise `listStations()`.
+ * @returns {string[]} codes triés
+ */
+export function listStationCodes({ dir = STATIONS_DIR } = {}) {
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((f) => FICHIER_FICHE.test(f))
+    .map((f) => f.slice(0, -5))
+    .sort();
+}
+
+/**
+ * Une fiche existe-t-elle pour ce code ? Existence du fichier seulement — la validité
+ * du contenu reste du ressort de `loadStation()`.
+ * @returns {boolean}
+ */
+export function stationExists(code, { dir = STATIONS_DIR } = {}) {
+  const upper = String(code ?? "").trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(upper)) return false;
+  return fs.existsSync(path.join(dir, `${upper}.json`));
+}
+
+/**
+ * Aide à afficher quand une escale est refusée : ce qui est disponible, et comment
+ * ajouter une escale — le cas nominal d'un déroutement est une escale imprévue.
+ * @returns {string}
+ */
+export function stationsHelp({ dir = STATIONS_DIR } = {}) {
+  const codes = listStationCodes({ dir });
+  // le modèle cité doit exister : désigner BKK.json quand il n'est pas là enverrait
+  // l'opérateur sur un fichier absent
+  const modele = codes.includes(DEFAULT_STATION) ? DEFAULT_STATION : (codes[0] ?? null);
+  const suite = modele ? ` sur le modèle de ${path.join(dir, `${modele}.json`)}` : "";
+  return `escales fichées : ${codes.length ? codes.join(", ") : "aucune"} — pour une escale non fichée, déposer ${path.join(dir, "<IATA>.json")}${suite}`;
+}
+
+/**
+ * Couronnes effectives d'une escale, de la plus proche a la plus lointaine.
+ *
+ * Rend les couronnes DECLAREES dans la fiche quand il y en a, sinon une couronne unique
+ * DERIVEE de `radius_km` et `max_transfer_min` — c'est-a-dire le comportement d'avant les
+ * couronnes, explicitement nomme. `source` dit laquelle des deux, pour que l'interface et
+ * le rapport ne fassent jamais passer un repli pour une declaration d'exploitation.
+ *
+ * @param {object} station fiche escale validee
+ * @returns {{couronnes: Array<{rang, rayon_m, trajet_min, mode, note}>, source: "declaree"|"derivee"}}
+ */
+export function couronnesDe(station) {
+  const declarees = station?.search?.couronnes ?? [];
+  if (declarees.length) {
+    const triees = [...declarees].sort((a, b) => a.rang - b.rang || a.rayon_m - b.rayon_m);
+    return { couronnes: triees, source: "declaree" };
+  }
+  return {
+    couronnes: [
+      {
+        rang: 1,
+        rayon_m: Math.round((station?.search?.radius_km ?? 5) * 1000),
+        trajet_min: station?.transfer?.max_transfer_min ?? 45,
+        mode: station?.transfer?.default_mode ?? "taxi",
+        note: "couronne unique dérivée du rayon de la fiche — aucune couronne déclarée",
+      },
+    ],
+    source: "derivee",
+  };
+}
+
 export const StationSchema = z
   .object({
     code: z.string().regex(/^[A-Z]{3}$/, "code IATA sur 3 lettres majuscules"),
@@ -28,6 +103,22 @@ export const StationSchema = z
       distance_ref: z.enum(["airport", "zone_center"]),
       use_distance_filter: z.boolean(),
       extra_nflt: z.array(z.string()).default([]),
+      /** COURONNES de recherche, de la plus proche a la plus lointaine.
+       * `trajet_min` est un temps DECLARE par l'exploitation, jamais mesure : l'outil
+       * n'a aucun service de routage et ne convertit pas une distance en duree. Il doit
+       * etre presente comme declare partout ou il s'affiche.
+       * Liste vide = une seule couronne derivee de `radius_km` / `max_transfer_min`. */
+      couronnes: z
+        .array(
+          z.object({
+            rang: z.number().int().min(1).max(9),
+            rayon_m: z.number().int().min(500).max(200000),
+            trajet_min: z.number().int().min(1).max(600),
+            mode: z.string().min(1),
+            note: z.string().default(""),
+          }),
+        )
+        .default([]),
     }),
     transfer: z.object({
       default_mode: z.string().min(1),
@@ -56,8 +147,7 @@ export function loadStation(code, { dir = STATIONS_DIR } = {}) {
   const upper = String(code ?? "").toUpperCase();
   const file = path.join(dir, `${upper}.json`);
   if (!fs.existsSync(file)) {
-    const known = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).join(", ") : "aucune";
-    throw new Error(`Fiche escale introuvable : ${file} (escales connues : ${known})`);
+    throw new Error(`Fiche escale introuvable : ${file} (${stationsHelp({ dir })})`);
   }
   let raw;
   try {
@@ -79,7 +169,6 @@ export function loadStation(code, { dir = STATIONS_DIR } = {}) {
 /** Toutes les fiches valides, triées par demo_priority croissant (EX-STA-1). */
 export function listStations({ dir = STATIONS_DIR } = {}) {
   if (!fs.existsSync(dir)) throw new Error(`Répertoire des fiches escale introuvable : ${dir}`);
-  const codes = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5));
-  const stations = codes.map((code) => loadStation(code, { dir }));
+  const stations = listStationCodes({ dir }).map((code) => loadStation(code, { dir }));
   return stations.sort((a, b) => a.demo_priority - b.demo_priority);
 }
