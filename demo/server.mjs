@@ -13,6 +13,7 @@
  * confiné à `lib/hai.mjs`).
  */
 import fs from "node:fs";
+import * as nodeCrypto from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -322,6 +323,7 @@ export function createDemoServer(opts = {}) {
       const client = await getHaiClient();
       const { runId } = manager.start({
         policy, avion, scenario, station, rows, ingestion: rows ? uploadedRapport : null,
+        empreintePax: rows ? empreintePax(rows) : null,
         // filet gratuit : les fiches mortes sont écartées avant la première session payante
         preflight: (candidats) => preflightUrls(candidats, { timeoutMs: 8000, concurrency: 6 }),
         simulate: false,
@@ -338,6 +340,7 @@ export function createDemoServer(opts = {}) {
     const speed = Math.min(1000, Math.max(1, Number(body.sim_speed) || 1));
     const { runId } = manager.start({
       policy, avion, scenario, station, rows, ingestion: rows ? uploadedRapport : null,
+      empreintePax: rows ? empreintePax(rows) : null,
       inventaire: loadSimInventaire(),
       simulate: true,
       collectFactory: ({ signal, extensionSignal }) => createSimulation({ speed, signal, extensionSignal }),
@@ -350,6 +353,30 @@ export function createDemoServer(opts = {}) {
    * Aucune session, aucun euro : c'est la réponse à « et si on montait le plafond Y ? »,
    * qui coûtait sinon un run complet (25 min, ~2,5 $, et un stock Booking qui a bougé).
    */
+  /** Empreinte non nominative d'une liste : de quoi dire « ce n'est pas la meme liste ». */
+  function empreintePax(rows) {
+    const cle = rows.map((r) => `${r.pnr}|${r.cabine}|${r.type_pax}`).sort().join(";");
+    return {
+      passagers: rows.length,
+      dossiers: new Set(rows.map((r) => r.pnr)).size,
+      empreinte: createHashSync(cle),
+    };
+  }
+  function createHashSync(texte) {
+    // eslint-disable-next-line no-undef
+    const { createHash } = nodeCrypto;
+    return createHash("sha256").update(texte).digest("hex").slice(0, 12);
+  }
+  function lireEmpreintePax(runId) {
+    const f = path.join(dirs.outDir, `pax-${runId}.json`);
+    if (!fs.existsSync(f)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(f, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
   function postReplay(body, res) {
     const runId = String(body.runId ?? "").replace(/[^a-z0-9]/gi, "");
     if (!runId) throw new HttpError(400, "runId manquant");
@@ -369,6 +396,14 @@ export function createDemoServer(opts = {}) {
     }
     const { policy, avion, scenario } = config;
     const station = loadStation(scenario.station);
+    // La liste doit etre CELLE du run rejoue. Un repli silencieux sur une liste generee
+    // repondait « 157 loges / 0 escalade » la ou la vraie liste donnait 176/62 : une
+    // fausse reponse flatteuse a la question de seance.
+    if (body.passengers === "uploaded" && !uploadedRows) throw new HttpError(400, "aucune liste passagers televersee");
+    const empreinteRun = lireEmpreintePax(runId);
+    if (body.passengers !== "uploaded" && empreinteRun) {
+      throw new HttpError(409, `ce run a ete joue sur une liste televersee (${empreinteRun.passagers} passagers, ${empreinteRun.dossiers} dossiers) : rejouez-le avec passengers:"uploaded", sinon la comparaison porte sur des passagers qui n'existent pas`);
+    }
     const rows = uploadedRowsFor(body) ?? generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" }).rows;
     const t0 = Date.now();
     const dossiers = buildDossiers(rows, policy);
@@ -377,6 +412,10 @@ export function createDemoServer(opts = {}) {
     return sendJson(res, 200, {
       runId,
       source_liste: uploadedRowsFor(body) ? "téléversée" : "générée",
+      passagers: rows.length,
+      dossiers: dossiers.length,
+      liste_du_run: empreinteRun ?? null,
+      liste_differente: Boolean(empreinteRun && empreinteRun.empreinte !== empreintePax(rows).empreinte),
       duree_ms: Date.now() - t0,
       caps: effectiveCaps(policy, station),
       summary: alloc.summary,
@@ -394,10 +433,27 @@ export function createDemoServer(opts = {}) {
    * une cascade de 403 indiscernables d'échecs d'hôtels.
    */
   async function getHealth(res) {
-    const brute = process.env.HAI_API_KEY ?? "";
-    const cle = brute.trim();
+    // MEME source que le run : `readApiKey()` se replie sur ~/.config/hai/.env quand la
+    // variable d'environnement est absente — lire seulement process.env annoncait
+    // « cle absente » sur une installation qui marche.
+    let brute = "";
+    let source = "aucune";
+    if (process.env.HAI_API_KEY) {
+      brute = process.env.HAI_API_KEY;
+      source = "variable d'environnement";
+    } else {
+      try {
+        const { readApiKey } = await import("../hai-admin-mcp/lib/hai.mjs");
+        brute = readApiKey() ?? "";
+        if (brute) source = "~/.config/hai/.env";
+      } catch {
+        /* pas de cle lisible : verdict « cle absente » */
+      }
+    }
+    const cle = String(brute).trim();
     const out = {
       paid_allowed: paidAllowed(),
+      cle_source: source,
       cle_presente: Boolean(cle),
       cle_longueur: cle.length,
       cle_espaces_parasites: cle.length !== brute.length,

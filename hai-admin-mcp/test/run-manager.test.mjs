@@ -62,9 +62,13 @@ test("run simulé via le manager : snapshot complet, sorties §8, captures priv�
   assert.equal(snap.phase, "sorties");
   assert.equal(Object.keys(snap.agents).length, 6);
   assert.equal(snap.plan.length, 157);
-  assert.ok(snap.plan.every((r) => r.pnr && r.statut === "OK"));
-  assert.deepEqual(snap.planSummary, { ok: 157, escalade: 0 });
-  assert.equal(snap.extension.reason, "couvert : aucun manque");
+  assert.ok(snap.plan.every((r) => r.pnr));
+  // 122/35 depuis la correction de la sonde (19-20/09) : le 157/0 d'avant reposait sur
+  // un sur-comptage — le maximum sondé était ajouté aux quantités affichées au lieu de
+  // les plafonner. Les 35 escalades portent toutes le motif « capacité ».
+  assert.deepEqual(snap.planSummary, { ok: 122, escalade: 35 });
+  assert.ok(snap.plan.filter((r) => r.statut !== "OK").every((r) => r.escalade === "DESK (capacité)"));
+  assert.match(snap.extension.reason, /épuisé|couvert/); // fixtures à 6 hôtels : l'extension épuise ses candidats
   assert.ok(snap.cost.per_night.total > 0);
   assert.equal(snap.messagesReady.count_fr, 157);
   assert.ok(snap.metricsTotals.steps > 0);

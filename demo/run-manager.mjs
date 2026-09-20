@@ -68,6 +68,7 @@ export function createRunManager({ hub, outDir }) {
   let controller = null; // annulation totale
   let extController = null; // annulation d'extension seule
   let runPromise = null;
+  let empreintePaxCourante = null; // empreinte non nominative de la liste du run en cours
   const captureSources = new Map(); // "hotel_key" → [{source, mediaType}] — jamais exposé
   const results = new Map(); // runId → {messages, cost, outputs, summary}
 
@@ -209,6 +210,8 @@ export function createRunManager({ hub, outDir }) {
     w(`cout-${result.runId}.json`, JSON.stringify(result.cost, null, 2) + "\n");
     w(`candidats-${result.runId}.json`, JSON.stringify(result.candidates, null, 2) + "\n");
     w(`releves-${result.runId}.json`, JSON.stringify(result.inventories, null, 2) + "\n");
+    // empreinte NON nominative de la liste jouee : le rejeu doit comparer ce qui est comparable
+    if (empreintePaxCourante) w(`pax-${result.runId}.json`, JSON.stringify(empreintePaxCourante, null, 2) + "\n");
     results.set(result.runId, {
       messages: result.messages,
       cost: result.cost,
@@ -228,7 +231,7 @@ export function createRunManager({ hub, outDir }) {
      * @param {object} args {policy, avion, scenario, station, rows?, inventaire?, collectFactory, simulate}
      * @returns {{runId: string}} — le run continue en tâche de fond dans le process
      */
-    start({ policy, avion, scenario, station, rows = null, ingestion = null, preflight = null, inventaire = undefined, collectFactory, simulate = false }) {
+    start({ policy, avion, scenario, station, rows = null, ingestion = null, preflight = null, empreintePax = null, inventaire = undefined, collectFactory, simulate = false }) {
       if (st.state === "running") throw new HttpError(409, "un run est déjà en cours (INV-10)");
       const now = new Date();
       const runId = newRunId(now);
@@ -236,6 +239,7 @@ export function createRunManager({ hub, outDir }) {
 
       st = freshState();
       captureSources.clear();
+      empreintePaxCourante = empreintePax;
       st.state = "running";
       st.runId = runId;
       st.simulate = simulate;

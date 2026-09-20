@@ -299,16 +299,23 @@ export function conformityOf(inv, tierPolicy, global, opts = {}) {
 }
 
 /** Libellé de conformité pour le plan et le rapport. */
-export function conformityLabel(conf) {
+export function conformityLabel(conf, { prixPris = null, capEur = null } = {}) {
+  // Le depassement affiche doit etre celui de la chambre REELLEMENT allouee : le
+  // minimum de l'hotel le sous-estimait systematiquement (la dedup prefere
+  // l'annulation gratuite, rarement la chambre la moins chere).
+  const plafond = capEur ?? conf.capEur;
+  const prix = prixPris ?? conf.minPrice;
+  const depasse = prix !== null && plafond !== null && prix > plafond;
+  const over = depasse ? ` (+${Math.round(prix - plafond)} EUR/nuit)` : "";
   switch (conf.level) {
     case "CONFORME":
-      return "CONFORME";
-    case "PARTIELLE":
-      return `PARTIELLE (${conf.missing.map((m) => AMENITY_LABELS[m] ?? m).join(", ")})`;
-    case "HORS_BAREME": {
-      const over = conf.minPrice !== null ? ` (+${Math.round(conf.minPrice - conf.capEur)} EUR/nuit)` : "";
-      return `HORS BAREME${over}`;
+      return depasse ? `HORS BAREME${over}` : "CONFORME";
+    case "PARTIELLE": {
+      const label = `PARTIELLE (${conf.missing.map((m) => AMENITY_LABELS[m] ?? m).join(", ")})`;
+      return depasse ? `HORS BAREME${over} · ${label}` : label;
     }
+    case "HORS_BAREME":
+      return `HORS BAREME${over}`;
     default:
       return "NON CONFORME";
   }

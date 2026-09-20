@@ -184,7 +184,7 @@ test("capacite : runProbe — model_probe « auto » : aucun override de modèle
   assert.equal("agent.model" in startArgs.overrides, false);
 });
 
-test("sonde : le maximum observé est un supplément PARTAGÉ, jamais recopié par type ni plafond global", () => {
+test("sonde : le maximum observé plafonne le TOTAL pris chez l'hôtel, jamais recopié par type", () => {
   const rooms = ["King", "Twin", "Suite"].map((t) =>
     mkRoom({ room_type: t, quantity_available: 9, quantity_displayed_max: 9, cap_reached: true, price_per_night: 60 }),
   );
@@ -198,10 +198,22 @@ test("sonde : le maximum observé est un supplément PARTAGÉ, jamais recopié p
   const sans = allocate({ dossiers, inventories: [inv], policy: DEFAULT_POLICY, station: STATION_BKK });
   assert.equal(sans.summary.ok, 27, "quantité affichée");
 
-  // avec une sonde à 30 : 27 affichées + 30 de supplément partagé = 57 — et surtout PAS 90
-  const sonde = applyProbeResult([inv], "h1", { found: true, rooms_selectable_max: 30 });
-  const avec = allocate({ dossiers, inventories: sonde, policy: DEFAULT_POLICY, station: STATION_BKK });
-  assert.equal(avec.summary.ok, 57, "le maximum de sonde est partagé entre les types, pas multiplié par leur nombre");
-  assert.ok(avec.summary.ok >= sans.summary.ok, "une sonde ne doit jamais faire DISPARAÎTRE du stock affiché");
-  assert.equal(sonde[0].answer.rooms_available_max_hotel, 30);
+  // sélecteur encore plafonné (borne BASSE) : on retient le plus favorable, 30 — pas 27+30, pas 90
+  const basse = applyProbeResult([inv], "h1", { found: true, hotel: "h1", requested_rooms: 30, rooms_selectable_max: 30, cap_reached: true });
+  const avecBasse = allocate({ dossiers, inventories: basse, policy: DEFAULT_POLICY, station: STATION_BKK });
+  assert.equal(avecBasse.summary.ok, 30, "le maximum de sonde plafonne le total de l'hôtel, il ne s'ajoute pas aux quantités affichées");
+  assert.ok(avecBasse.summary.ok >= sans.summary.ok, "une borne basse ne doit jamais faire DISPARAÎTRE du stock affiché");
+  assert.equal(basse[0].answer.rooms_available_max_hotel, 30);
+
+  // sélecteur NON plafonné : mesure FERME, même en dessous de l'affichage
+  const ferme = applyProbeResult([inv], "h1", { found: true, hotel: "h1", requested_rooms: 30, rooms_selectable_max: 12, cap_reached: false });
+  const avecFerme = allocate({ dossiers, inventories: ferme, policy: DEFAULT_POLICY, station: STATION_BKK });
+  assert.equal(avecFerme.summary.ok, 12, "une mesure ferme corrige l'affichage à la BAISSE : on ne promet pas des chambres qui n'existent pas");
+
+  // valeur invraisemblable : bornée au plafond de sonde, avec avertissement
+  const avert = [];
+  const fou = applyProbeResult([inv], "h1", { found: true, hotel: "h1", requested_rooms: 30, rooms_selectable_max: 1000, cap_reached: true },
+    { emit: (t, d) => avert.push(d.message), maxPlausible: 30 });
+  assert.equal(fou[0].answer.rooms_available_max_hotel, 30);
+  assert.match(avert[0], /invraisemblable/);
 });

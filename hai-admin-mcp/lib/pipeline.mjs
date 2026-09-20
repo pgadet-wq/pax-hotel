@@ -222,20 +222,39 @@ export async function runPipeline({
   if (typeof preflight === "function" && candidates.length) {
     emit("phase", { phase: "prevol", candidats: candidates.length });
     try {
-      const res = await preflight(candidates.map((c) => ({ id: c.id, name: c.name, url: c.url })));
+      const res = (await preflight(candidates.map((c) => ({ id: c.id, name: c.name, url: c.url })))) ?? [];
+      // Seul 404/410 est un verdict ferme. Une « redirection » peut etre une fusion de
+      // fiches, un mur de consentement ou une page traduite : on retrograde, on n'ecarte pas.
       const ecartes = new Map();
-      for (const r of res ?? []) {
-        if (r.verdict === "morte" || r.verdict === "redirigee") ecartes.set(r.id ?? r.url, r);
-      }
+      for (const r of res) if (r.verdict === "morte") ecartes.set(r.id ?? r.url, r);
+      const redirigees = res.filter((r) => r.verdict === "redirigee");
+      // PLANCHER : un filet qui vide l'inventaire est en panne, pas efficace. Au-dela du
+      // tiers des candidats, on ne filtre rien et on laisse l'operateur trancher.
+      const tropNombreux = ecartes.size > Math.floor(candidates.length / 3);
       emit("preflight", {
-        verifies: res?.length ?? 0,
+        verifies: res.length,
         ecartes: [...ecartes.values()].map((r) => ({ name: r.name, verdict: r.verdict, detail: r.detail })),
-        indeterminees: (res ?? []).filter((r) => r.verdict === "indeterminee").length,
+        redirigees: redirigees.map((r) => ({ name: r.name, detail: r.detail })),
+        indeterminees: res.filter((r) => r.verdict === "indeterminee").length,
+        applique: !tropNombreux,
       });
-      for (const r of ecartes.values()) {
-        emit("warning", { message: `fiche écartée avant tout agent : « ${r.name} » — ${r.detail}` });
+      for (const r of redirigees) {
+        emit("warning", { message: `fiche a verifier : « ${r.name} » — ${r.detail} (conservee, relevee en dernier)` });
       }
-      if (ecartes.size) candidates = candidates.filter((c) => !ecartes.has(c.id ?? c.url));
+      if (tropNombreux) {
+        emit("warning", {
+          message: `pre-vol ignore : ${ecartes.size} fiches sur ${candidates.length} declarees mortes — au-dela du tiers, c'est le controle qui est suspect, pas l'inventaire. Aucun candidat n'est ecarte.`,
+        });
+      } else {
+        for (const r of ecartes.values()) {
+          emit("warning", { message: `fiche ecartee avant tout agent : « ${r.name} » — ${r.detail}` });
+        }
+        if (ecartes.size) candidates = candidates.filter((c) => !ecartes.has(c.id ?? c.url));
+        if (redirigees.length) {
+          const suspects = new Set(redirigees.map((r) => r.id ?? r.url));
+          candidates = [...candidates.filter((c) => !suspects.has(c.id ?? c.url)), ...candidates.filter((c) => suspects.has(c.id ?? c.url))];
+        }
+      }
     } catch (err) {
       emit("warning", { message: `pré-vol des fiches impossible (${String(err?.message ?? err)}) — les relevés partent sans ce filet` });
     }
@@ -319,7 +338,7 @@ export async function runPipeline({
       let applique = false;
       answers.forEach((answer, i) => {
         if (!answer) return;
-        const updated = applyProbeResult(inventories, probesAJouer[i].hotelKey, answer);
+        const updated = applyProbeResult(inventories, probesAJouer[i].hotelKey, answer, { emit, maxPlausible: policy.extension.probe_no_rooms_max });
         inventories.length = 0;
         inventories.push(...updated);
         applique = true;

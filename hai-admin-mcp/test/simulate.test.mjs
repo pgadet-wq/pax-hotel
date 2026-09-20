@@ -61,12 +61,14 @@ test("run simulé complet : phases §5.8 ordonnées, vague 1 = 1 sonde + 1 relev
   assert.equal(ext[0].wave, 1);
   assert.deepEqual(ext[0].planned, { probes: 1, surveys: 1 });
   assert.deepEqual(ext[0].limits, { sessions_used: 0, sessions_max: 18, cost_usd: 0, cost_max: 10, wave: 1, max_waves: 4 });
-  assert.equal(ext.at(-1).reason, "couvert : aucun manque");
+  // depuis la correction de la sonde, la chorégraphie n'est plus couverte à 100 % :
+  // l'extension épuise ses candidats (les fixtures ne portent que 6 hôtels)
+  assert.match(ext.at(-1).reason, /épuisé|couvert/);
 
   // sonde : starting puis completed avec résultat borné (EX-EXT-1)
   const probes = events.filter((e) => e.type === "probe").map((e) => e.data);
   assert.equal(probes[0].status, "starting");
-  assert.deepEqual(probes.at(-1).result, { rooms_available_max: 40, cap_reached: false });
+  assert.deepEqual(probes.at(-1).result, { rooms_available_max: 30, cap_reached: true });
 
   // agents : 6 relevés (5 étage B + amaranth en vague 1), pensées FR, captures, métriques 0 $
   const agentKeys = new Set(events.filter((e) => e.type === "agent_status").map((e) => e.hotel_key));
@@ -84,8 +86,8 @@ test("run simulé complet : phases §5.8 ordonnées, vague 1 = 1 sonde + 1 relev
   // fin : tous logés, 2 sessions d'extension, 0 $
   const done = events.at(-1);
   assert.equal(done.type, "done");
-  assert.equal(done.data.escalade, 0);
-  assert.equal(done.data.ok, 157);
+  assert.equal(done.data.escalade, 35);
+  assert.equal(done.data.ok, 122);
   assert.equal(done.data.sessions_used, 2);
   assert.equal(done.data.cost_usd, 0);
   assert.equal(result.extensionWaves, 1);

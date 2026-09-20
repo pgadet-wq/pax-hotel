@@ -104,8 +104,21 @@ export function planExtension({
  * l'allocation applique au TOTAL pris chez cet hôtel ; les types plafonnés reçoivent
  * la borne pour ne plus être bloqués à leur quantité affichée.
  */
-export function applyProbeResult(inventories, hotelKey, probeAnswer) {
-  const max = probeAnswer?.found ? probeAnswer.rooms_selectable_max : -1;
+export function applyProbeResult(inventories, hotelKey, probeAnswer, { emit = null, maxPlausible = 50 } = {}) {
+  let max = probeAnswer?.found ? probeAnswer.rooms_selectable_max : -1;
+  // Un agent web peut confondre un prix, un nombre d'avis ou un numero de chambre avec
+  // un nombre de chambres. Le selecteur Booking peut legitimement afficher plus que le
+  // nombre demande, mais jamais des centaines : on borne au plafond configure.
+  if (max > maxPlausible) {
+    emit?.("warning", {
+      message: `sonde invraisemblable sur « ${probeAnswer.hotel ?? hotelKey} » : ${max} chambres selectionnables annoncees — valeur ramenee a ${maxPlausible} (plafond de sonde)`,
+    });
+    max = maxPlausible;
+  }
+  // `cap_reached` porte toute la semantique : selecteur ENCORE plafonne = borne BASSE
+  // (l'hotel en a au moins `max`) ; selecteur non plafonne = mesure FERME (il n'en a
+  // pas plus). Confondre les deux, c'est promettre des chambres qui n'existent pas.
+  const borneFerme = probeAnswer?.cap_reached === false;
   return inventories.map((inv) => {
     if ((inv.hotelKey ?? inv.hotel) !== hotelKey || !inv.answer?.found || max < 0) return inv;
     return {
@@ -113,6 +126,8 @@ export function applyProbeResult(inventories, hotelKey, probeAnswer) {
       answer: {
         ...inv.answer,
         rooms_available_max_hotel: max,
+        rooms_probe_ferme: borneFerme,
+        rooms_probe_demande: Number.isFinite(Number(probeAnswer?.requested_rooms)) ? Number(probeAnswer.requested_rooms) : null,
         rooms: inv.answer.rooms.map((r) =>
           r.cap_reached && r.rooms_available_max == null ? { ...r, rooms_available_max: max, rooms_max_is_hotel_cap: true } : r,
         ),

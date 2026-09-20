@@ -64,6 +64,19 @@ function buildStock(answer, preferFreeCancel, assumedStock = 6) {
 }
 
 /**
+ * Etat de stock d'un hotel apres sonde : plafond du TOTAL prenable chez lui, et
+ * supplement partage par les types dont l'affichage etait plafonne.
+ */
+function sondeDe(answer, stock) {
+  const M = Number(answer.rooms_available_max_hotel);
+  const affiche = stock.reduce((n, o) => n + o.left, 0);
+  if (!Number.isFinite(M) || M < 0) return { hotelCap: null, probeMax: null, probeFerme: false, liftBudget: 0, liftUsed: 0, stock };
+  const ferme = answer.rooms_probe_ferme === true;
+  const plafond = ferme ? M : Math.max(affiche, M);
+  return { hotelCap: plafond, probeMax: M, probeFerme: ferme, liftBudget: Math.max(0, plafond - affiche), liftUsed: 0, stock };
+}
+
+/**
  * @param {object} args
  * @param {Array} args.dossiers sortie de buildDossiers (ordre de priorité respecté)
  * @param {Array} args.inventories relevés, même partiels : [{hotel|hotelKey, sessionId?, contracted?, preferred?, fallback?, payment?, answer}]
@@ -100,15 +113,17 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
         accessible: inv.answer.amenities?.accessible === true,
         reglement: modeReglement({ contracted: inv.contracted === true, payment: inv.payment ?? inv.answer.payment }, policy),
         conf,
-        // Supplément de sonde (EX-ALL-5) : `rooms_selectable_max` est un maximum
-        // observé POUR L'HÔTEL, pas par type. Il s'ajoute donc aux quantités
-        // affichées comme un budget PARTAGÉ entre les types que l'affichage
-        // plafonnait — le recopier sur chaque type multiplierait la capacité par le
-        // nombre de types (mesuré : 23 chambres réelles annoncées 90), et le poser en
-        // plafond global ferait disparaître du stock réellement affiché.
-        liftBudget: Number.isFinite(inv.answer.rooms_available_max_hotel) ? Math.max(0, inv.answer.rooms_available_max_hotel) : 0,
-        liftUsed: 0,
-        stock: buildStock(inv.answer, preferFC, assumedStock),
+        // Sonde (EX-ALL-5). `rooms_selectable_max` est un maximum observe POUR
+        // L'HOTEL, jamais par type. Deux lectures selon `cap_reached` :
+        //  - selecteur NON plafonne  -> mesure FERME : le total pris chez cet hotel ne
+        //    peut pas depasser M, meme si l'affichage par type promet davantage ;
+        //  - selecteur encore plafonne -> borne BASSE : l'hotel en a au moins M, on
+        //    retient le plus favorable entre l'affichage cumule et M.
+        // Dans les deux cas c'est un PLAFOND DE TOTAL : additionner M aux quantites
+        // affichees ferait appeler un hotel pour 139 chambres la ou la sonde — une
+        // session payante — en a mesure 40.
+        ...sondeDe(inv.answer, buildStock(inv.answer, preferFC, assumedStock)),
+        taken: 0,
       };
     });
 
@@ -130,15 +145,19 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
       .sort((a, b) => LEVEL_RANK[a.c.level] - LEVEL_RANK[b.c.level] || b.score - a.score);
   }
 
-  /** Solde du supplément de sonde, partagé par les types que l'affichage plafonnait. */
+  /** Solde du supplement de sonde, partage par les types que l'affichage plafonnait. */
   const liftLeft = (h) => Math.max(0, h.liftBudget - h.liftUsed);
+  /** Chambres encore prenables chez cet hotel, plafond de sonde compris. */
+  const hotelLeft = (h) => (h.hotelCap === null ? Infinity : Math.max(0, h.hotelCap - h.taken));
 
-  /** Offres utilisables d'un hôtel pour un tier, triées prix croissant. */
+  /** Offres utilisables d'un hotel pour un tier, triees prix croissant. */
   function usableOffers(h, tier, overCapAllowed) {
     const cap = caps[tier];
     const bonus = liftLeft(h);
+    const resteHotel = hotelLeft(h);
+    if (resteHotel <= 0) return [];
     return h.stock
-      .map((o) => ({ ...o, left: o.liftable ? o.left + bonus : o.left, _src: o }))
+      .map((o) => ({ ...o, left: Math.min(o.liftable ? o.left + bonus : o.left, resteHotel), _src: o }))
       .filter((o) => o.left > 0 && (overCapAllowed || o.price <= cap))
       .sort((a, b) => a.price - b.price);
   }
@@ -161,9 +180,10 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
 
     const take = (offer, count, note = null) => {
       const src = offer._src ?? offer;
-      const surStock = Math.min(src.left, count); // d'abord la quantité affichée
+      const surStock = Math.min(src.left, count); // d'abord la quantite affichee
       src.left -= surStock;
-      if (count > surStock) h.liftUsed += count - surStock; // puis le supplément partagé
+      if (count > surStock) h.liftUsed += count - surStock; // puis le supplement partage
+      h.taken += count; // plafond de sonde : total pris chez cet hotel
       return { rooms: [{ type: offer.room_type, count, price: offer.price, assumed: offer.assumed, capReached: offer.capReached, occupancy_adults: offer.occupancy_adults, occupancy_children: offer.occupancy_children }], hotel: h, conf: c, note };
     };
 
@@ -312,7 +332,9 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
       chambres,
       prix_total: placed ? placed.rooms.reduce((s, r) => s + r.count * r.price, 0) * nights : "",
       devise: placed ? placed.hotel.currency : "",
-      conformite: placed ? conformityLabel(placed.conf) : "",
+      // le depassement doit porter sur la chambre REELLEMENT prise, pas sur la moins
+      // chere de l'hotel : l'ecart masque atteignait 6 700 EUR/nuit sur la vraie liste
+      conformite: placed ? conformityLabel(placed.conf, { prixPris: Math.max(...placed.rooms.map((r) => r.price)), capEur: caps[tierUsed] }) : "",
       mode_reglement: placed ? placed.hotel.reglement.mode : "",
       hotel_source: placed ? placed.hotel.source : "",
       provisoire,

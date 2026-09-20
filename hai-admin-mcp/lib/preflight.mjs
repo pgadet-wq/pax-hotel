@@ -14,8 +14,12 @@
 
 /** Slug d'une fiche Booking : `/hotel/<cc>/<slug>.html`. */
 export function hotelSlug(url) {
-  const m = /\/hotel\/[a-z]{2}\/([^/?#]+?)(?:\.[a-z]{2,5})?\.html/i.exec(String(url ?? ""));
-  return m ? m[1].toLowerCase() : null;
+  const m = /\/hotel\/[a-z]{2}\/([^/?#]+?)\.html/i.exec(String(url ?? ""));
+  if (!m) return null;
+  // Booking sert la meme fiche dans toutes ses langues : `...-21.html`, `...-21.fr.html`,
+  // `...-21.en-gb.html`, `...-21.zh-cn.html`. Le suffixe de langue n'est PAS un autre
+  // hotel — le confondre avec une redirection ecartait des fiches vivantes.
+  return m[1].toLowerCase().replace(/\.[a-z]{2}(?:-[a-z]{2})?$/i, "");
 }
 
 const VERDICTS = ["vivante", "morte", "redirigee", "indeterminee"];

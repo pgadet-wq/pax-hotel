@@ -99,11 +99,11 @@ export const SIM_ANSWERS = {
 };
 
 /** Résultat de la sonde de capacité simulée (vague 1, EX-EXT-1). */
-// Maximum sélectionnable rendu par la sonde simulée. Depuis la correction de la
-// sémantique de sonde (supplément PARTAGÉ entre les types plafonnés, et non recopié
-// sur chacun), c'est cette valeur qui décide si la chorégraphie de démonstration
-// couvre l'avion : 40 redonne exactement 157 dossiers logés / 0 escalade.
-export const SIM_PROBE_MAX = 40;
+// Maximum sélectionnable rendu par la sonde simulée. Le pipeline réel demande au plus
+// `probe_no_rooms_max` (30) : une sonde ne peut pas rendre davantage, la fixture s'y tient.
+// `cap_reached: true` va avec : sur un hôtel à 29 types, le sélecteur reste plafonné, donc
+// 30 est une borne BASSE (l'hôtel en a au moins 30) et non une mesure ferme.
+export const SIM_PROBE_MAX = 30;
 
 /* ------------------------------------------------------ pensées scriptées */
 
@@ -309,7 +309,7 @@ export function createSimulation({ speed = 1, signal = null, extensionSignal = n
         found: true,
         requested_rooms: probe.requested_rooms,
         rooms_selectable_max: SIM_PROBE_MAX,
-        cap_reached: false,
+        cap_reached: true,
         notes: "Sonde simulée (aucune session d'agent).",
       };
       ctx.emit("probe", {
