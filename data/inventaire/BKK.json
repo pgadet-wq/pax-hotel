@@ -95,7 +95,7 @@
       "source": "agent",
       "contracted": false,
       "preferred": false,
-      "excluded": false,
+      "excluded": true,
       "stars": 4,
       "review_score": 8.4,
       "review_count": 1876,
@@ -126,7 +126,7 @@
         "phone": null,
         "email": null
       },
-      "notes": "Relevé POC du 31/08.",
+      "notes": "Relevé POC du 31/08. [19/09] Fiche exclue : page Booking en 404 pendant le run réel du 16/09 (mu3lnxm4). Réactiver depuis l onglet Inventaire après un pré-vol concluant.",
       "last_survey_at": "2026-08-31T03:47:00Z"
     },
     {

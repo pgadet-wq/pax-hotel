@@ -99,7 +99,11 @@ export const SIM_ANSWERS = {
 };
 
 /** Résultat de la sonde de capacité simulée (vague 1, EX-EXT-1). */
-export const SIM_PROBE_MAX = 30;
+// Maximum sélectionnable rendu par la sonde simulée. Depuis la correction de la
+// sémantique de sonde (supplément PARTAGÉ entre les types plafonnés, et non recopié
+// sur chacun), c'est cette valeur qui décide si la chorégraphie de démonstration
+// couvre l'avion : 40 redonne exactement 157 dossiers logés / 0 escalade.
+export const SIM_PROBE_MAX = 40;
 
 /* ------------------------------------------------------ pensées scriptées */
 

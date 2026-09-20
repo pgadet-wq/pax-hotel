@@ -24,9 +24,9 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadStation } from "../lib/stations.mjs";
-import { loadInventaire, isStale, candidatesFrom, slugify } from "../lib/inventaire.mjs";
+import { loadInventaire, isStale, candidatesFrom, slugify, capaciteIndicative } from "../lib/inventaire.mjs";
 import { DEFAULT_POLICY, effectiveCaps } from "../lib/policy.mjs";
-import { mergeConfig, resolveDates, DEFAULT_AVION, newRunId } from "../lib/scenario.mjs";
+import { mergeConfig, resolveDates, DEFAULT_AVION, newRunId, stationClock } from "../lib/scenario.mjs";
 import { generatePassengers } from "../lib/passagers.mjs";
 import { ingestPassagers, formatRapport, IngestError } from "../lib/paxlist.mjs";
 import { buildDossiers, computeNeeds } from "../lib/dossiers.mjs";
@@ -69,7 +69,7 @@ const { policy, avion, scenario } = mergeConfig({
     seed: Number(opt("seed", "42")),
   },
 });
-const { checkin, checkout } = resolveDates(scenario);
+const { checkin, checkout } = resolveDates(scenario, new Date(), station.timezone);
 
 /* Liste passagers : fichier compagnie (ingestion PAXLIST v1, rapport imprimé et
    BLOQUANT sur valeur illisible) ou liste générée (avion plein, seed du scénario). */
@@ -103,7 +103,9 @@ if (flag("dry-run")) {
   const dossiers = buildDossiers(rows, policy);
   const needs = computeNeeds(dossiers);
   const caps = effectiveCaps(policy, station);
+  const horloge = stationClock(new Date(), station.timezone);
   console.log(`Escale ${station.code} — ${station.name} · séjour du ${checkin} au ${checkout} (${scenario.nights} nuit${scenario.nights > 1 ? "s" : ""})`);
+  console.log(`  heure locale escale : ${horloge.date} ${horloge.heure} (${station.timezone}) — c'est CETTE nuit qui sera relevée`);
   console.log(`${rows.length} passagers, ${dossiers.length} dossiers — plafonds effectifs J ${caps.J} / W ${caps.W} / Y ${caps.Y} EUR/nuit`);
   console.log("\nBesoins par tier :");
   for (const tier of ["J", "W", "Y"]) {
@@ -121,6 +123,14 @@ if (flag("dry-run")) {
 
   const candidates = candidatesFrom(inv, policy, { station, needs: needs.parTier });
   const maxB = policy.global.discovery.max_hotels_stage_b;
+  const besoinTotal = ["J", "W", "Y"].reduce((n, t) => n + (needs.parTier[t]?.chambres ?? 0), 0);
+  const cap = capaciteIndicative(candidates);
+  console.log(`\nVivier : ${cap.hotels} candidat(s) — capacité indicative ~${cap.total} chambre(s) pour un besoin de ${besoinTotal}`);
+  if (cap.total < besoinTotal) {
+    console.log("  ATTENTION : le vivier ne peut PAS couvrir le besoin — le run s'arrêtera « épuisé » et escaladera.");
+    console.log(`  Avant le run : DEMO_ALLOW_PAID=1 node hai-admin-mcp/tools/inventaire.mjs --station ${station.code} --refresh --max 20`);
+    console.log("  ou cocher « Forcer la découverte » pour chercher des hôtels au-delà de l'inventaire.");
+  }
   console.log(`\nRelevés étage B (${Math.min(maxB, candidates.length)} premiers sur ${candidates.length} candidats) :`);
   for (const c of candidates.slice(0, 5)) {
     console.log(`  - ${c.name}${c.fallback ? " [repli]" : ""} (tiers ${c.tiers.join("/")})`);
@@ -176,6 +186,7 @@ if (offline) {
   w(`plan-${result.runId}.csv`, result.outputs.planCsv);
   w(`rapport-${result.runId}.md`, result.outputs.rapportMd);
   w(`messages-${result.runId}.csv`, result.outputs.messagesCsv);
+  w(`rooming-${result.runId}.csv`, result.outputs.roomingCsv);
   w(`cout-${result.runId}.json`, JSON.stringify(result.cost, null, 2) + "\n");
   w(`releves-${result.runId}.json`, JSON.stringify(result.inventories, null, 2) + "\n");
 
@@ -426,6 +437,7 @@ for (const [name, content] of [
   [`plan-${result.runId}.csv`, result.outputs.planCsv],
   [`rapport-${result.runId}.md`, result.outputs.rapportMd],
   [`messages-${result.runId}.csv`, result.outputs.messagesCsv],
+  [`rooming-${result.runId}.csv`, result.outputs.roomingCsv],
   [`cout-${result.runId}.json`, JSON.stringify(result.cost, null, 2) + "\n"],
   [`releves-${result.runId}.json`, JSON.stringify(result.inventories, null, 2) + "\n"],
 ]) {

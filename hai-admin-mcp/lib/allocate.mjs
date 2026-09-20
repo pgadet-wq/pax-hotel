@@ -48,7 +48,17 @@ function buildStock(answer, preferFreeCancel, assumedStock = 6) {
       breakfast_included: Boolean(r.breakfast_included),
       assumed: displayed < 0 && probed === null,
       capReached: r.cap_reached === true && probed === null,
-      left: probed !== null ? Math.max(0, probed) : displayed < 0 ? assumedStock : Math.max(0, displayed),
+      // type dont l'affichage était plafonné et qu'une sonde a débloqué : il peut
+      // puiser dans le supplément PARTAGÉ de l'hôtel (voir `liftBudget`)
+      liftable: r.rooms_max_is_hotel_cap === true,
+      left:
+        r.rooms_max_is_hotel_cap === true
+          ? (displayed < 0 ? 0 : Math.max(0, displayed)) // la quantité affichée reste acquise
+          : probed !== null
+            ? Math.max(0, probed)
+            : displayed < 0
+              ? assumedStock
+              : Math.max(0, displayed),
     };
   });
 }
@@ -90,6 +100,14 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
         accessible: inv.answer.amenities?.accessible === true,
         reglement: modeReglement({ contracted: inv.contracted === true, payment: inv.payment ?? inv.answer.payment }, policy),
         conf,
+        // Supplément de sonde (EX-ALL-5) : `rooms_selectable_max` est un maximum
+        // observé POUR L'HÔTEL, pas par type. Il s'ajoute donc aux quantités
+        // affichées comme un budget PARTAGÉ entre les types que l'affichage
+        // plafonnait — le recopier sur chaque type multiplierait la capacité par le
+        // nombre de types (mesuré : 23 chambres réelles annoncées 90), et le poser en
+        // plafond global ferait disparaître du stock réellement affiché.
+        liftBudget: Number.isFinite(inv.answer.rooms_available_max_hotel) ? Math.max(0, inv.answer.rooms_available_max_hotel) : 0,
+        liftUsed: 0,
         stock: buildStock(inv.answer, preferFC, assumedStock),
       };
     });
@@ -112,10 +130,17 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
       .sort((a, b) => LEVEL_RANK[a.c.level] - LEVEL_RANK[b.c.level] || b.score - a.score);
   }
 
+  /** Solde du supplément de sonde, partagé par les types que l'affichage plafonnait. */
+  const liftLeft = (h) => Math.max(0, h.liftBudget - h.liftUsed);
+
   /** Offres utilisables d'un hôtel pour un tier, triées prix croissant. */
   function usableOffers(h, tier, overCapAllowed) {
     const cap = caps[tier];
-    return h.stock.filter((o) => o.left > 0 && (overCapAllowed || o.price <= cap)).sort((a, b) => a.price - b.price);
+    const bonus = liftLeft(h);
+    return h.stock
+      .map((o) => ({ ...o, left: o.liftable ? o.left + bonus : o.left, _src: o }))
+      .filter((o) => o.left > 0 && (overCapAllowed || o.price <= cap))
+      .sort((a, b) => a.price - b.price);
   }
 
   /** L'hôtel pourrait-il loger le dossier ? (vérification SANS décrément, pour le motif d'escalade) */
@@ -129,13 +154,16 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
   }
 
   /** Tente de loger un dossier chez un hôtel ; retourne la prise (stock décrémenté) ou null. */
-  function takeRooms(entry, dossier, tier) {
+  function takeRooms(entry, dossier, tier, forceOverCap = false) {
     const { h, c } = entry;
-    const overCapAllowed = c.level === "HORS_BAREME";
+    const overCapAllowed = forceOverCap || c.level === "HORS_BAREME";
     const sorted = usableOffers(h, tier, overCapAllowed);
 
     const take = (offer, count, note = null) => {
-      offer.left -= count;
+      const src = offer._src ?? offer;
+      const surStock = Math.min(src.left, count); // d'abord la quantité affichée
+      src.left -= surStock;
+      if (count > surStock) h.liftUsed += count - surStock; // puis le supplément partagé
       return { rooms: [{ type: offer.room_type, count, price: offer.price, assumed: offer.assumed, capReached: offer.capReached, occupancy_adults: offer.occupancy_adults, occupancy_children: offer.occupancy_children }], hotel: h, conf: c, note };
     };
 
@@ -156,8 +184,11 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
     return null;
   }
 
-  const plan = [];
-  for (const d of dossiers) {
+  /**
+   * Tentative de placement d'un dossier. `forceOverCap` autorise les chambres
+   * au-dessus du plafond même chez un hôtel jugé CONFORME (dérogation).
+   */
+  function tenterPlacement(d, forceOverCap) {
     const isPmr = d.overlays.pmr;
     let placed = null;
     let tierUsed = d.cabin;
@@ -165,13 +196,11 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
     let accessBlocked = false;
 
     // Dossiers HORS PLAN HÔTEL : traitement nominatif au desk (civière, médical, mineur
-    // non accompagné) ou pas de droit d'entrée sur le territoire de l'escale (fiche escale
-    // `constraints.entry_visa_check` — CDC §5.2 « traitement nominatif GHA »). Ils ne
-    // consomment aucun stock et ne nourrissent PAS l'extension : relever plus d'hôtels ne
-    // les logera pas.
-    // Seul un droit d'entrée REFUSÉ sort du plan. « INCONNU » = à vérifier au comptoir :
-    // le dossier reste dans le plan et sa capacité reste provisionnée — sinon l'extension
-    // ne chercherait aucune chambre pour lui et l'immigration pourrait l'admettre sans lit.
+    // non accompagné) ou droit d'entrée REFUSÉ sur le territoire de l'escale (fiche
+    // escale `constraints.entry_visa_check` — CDC §5.2 « traitement nominatif GHA »).
+    // Ils ne consomment aucun stock et ne nourrissent PAS l'extension : relever plus
+    // d'hôtels ne les logera pas. « INCONNU » n'est PAS un refus : le dossier reste
+    // dans le plan, sa capacité reste provisionnée, et la ligne porte la réserve.
     const horsPlan = d.escaladeNominative ?? (d.droitEntree === "NON" ? "droit d'entrée" : null);
     const droitAVerifier = d.droitEntree === "INCONNU";
 
@@ -191,7 +220,7 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
           if (couldFit(entry.h, d, tier, entry.c.level === "HORS_BAREME")) paymentBlocked = true;
           continue;
         }
-        const taken = takeRooms(entry, d, tier);
+        const taken = takeRooms(entry, d, tier, forceOverCap);
         if (taken) {
           tierUsed = tier;
           return taken;
@@ -199,6 +228,7 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
       }
       return null;
     };
+
     if (!horsPlan) {
       placed = tryTier(d.cabin, { allowOverCap: !isPmr });
       if (!placed && isPmr && pmrCfg.allow_tier_upgrade) {
@@ -208,6 +238,30 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
       }
       if (!placed && isPmr) placed = tryTier(d.cabin, { allowOverCap: true });
     }
+    return { placed, tierUsed, paymentBlocked, accessBlocked, horsPlan, droitAVerifier, derogationPrix: false };
+  }
+
+  // DEUX PASSES (EX-ALL-4). Passe 1 : tout le monde DANS LE BARÈME, dans l'ordre de
+  // priorité. Passe 2 : seulement pour les dossiers restés sans chambre, on rouvre les
+  // chambres au-dessus du plafond, y compris chez les hôtels jugés CONFORMES — ils les
+  // refusaient, alors qu'un hôtel HORS BARÈME les offrait toutes, si bien que MONTER le
+  // plafond faisait PERDRE des dossiers (mesuré : 157 logés à 80 EUR, 62 à 150 EUR).
+  // L'ordre des passes est ce qui rend le levier « plafond » monotone : une chambre
+  // chère n'est prise que lorsque plus personne ne peut avoir de chambre au barème.
+  const etats = new Map();
+  for (const d of dossiers) etats.set(d, tenterPlacement(d, false));
+  for (const d of dossiers) {
+    const e = etats.get(d);
+    if (e.placed || e.horsPlan) continue;
+    if (!policy.cabins[d.cabin]?.allow_above_cap_if_no_alternative) continue;
+    const retry = tenterPlacement(d, true);
+    if (retry.placed) etats.set(d, { ...retry, derogationPrix: true });
+  }
+
+  const plan = [];
+  for (const d of dossiers) {
+    const isPmr = d.overlays.pmr;
+    const { placed, tierUsed, paymentBlocked, accessBlocked, horsPlan, droitAVerifier, derogationPrix } = etats.get(d);
 
     const notes = [];
     if (horsPlan === "droit d'entrée") {
@@ -232,6 +286,10 @@ export function allocate({ dossiers, inventories, policy, station = null, nights
     }
     if (placed?.rooms.some((r) => r.assumed)) notes.push("quantité non affichée par le site — stock supposé, à confirmer");
     if (placed?.rooms.some((r) => r.capReached)) notes.push("quantité plafonnée par l'affichage (borne basse, sonde possible)");
+    if (derogationPrix && placed) {
+      const prixMax = Math.max(...placed.rooms.map((r) => r.price));
+      notes.push(`HORS BARÈME : ${Math.round(prixMax)} EUR pour un plafond de ${caps[tierUsed]} EUR — aucune chambre dans le barème, dérogation appliquée`);
+    }
 
     const motif = horsPlan ?? (accessBlocked ? "accessibilité" : paymentBlocked ? "règlement" : "capacité");
     const sousReserve = droitAVerifier && placed ? "droit d'entrée à vérifier" : "";

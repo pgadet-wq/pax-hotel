@@ -45,9 +45,12 @@ test("CLI rebooking-v2 : --offline rejoue les fixtures — plan, rapport, messag
     assert.ok(m, `sortie ${kind}* absente de la sortie CLI`);
     assert.ok(fs.existsSync(path.join(ROOT, "out", m[1])), `${m[1]} non écrit`);
   }
-  // référence de non-régression : le rejeu est déterministe (fixtures + seed 42).
-  // Toute évolution du noyau qui déplace ce couple doit être un choix, pas une surprise.
-  assert.match(r.stdout, /88 dossiers logés, 69 en escalade/, "référence hors ligne 88/69 déplacée");
+  // Référence de non-régression : le rejeu est déterministe (fixtures + seed 42).
+  // 88/69 jusqu'au 19/09 ; 90/67 depuis la dérogation de dernier recours (deuxième
+  // passe d'allocation : une chambre au-dessus du plafond vaut mieux qu'une escalade
+  // quand plus personne ne peut être logé au barème). Tout déplacement de ce couple
+  // doit être un choix, pas une surprise.
+  assert.match(r.stdout, /90 dossiers logés, 67 en escalade/, "référence hors ligne 90/67 déplacée");
 });
 
 test("CLI rebooking-v2 : --in ingère une liste compagnie et refuse une valeur illisible", () => {

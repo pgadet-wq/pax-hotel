@@ -19,6 +19,55 @@ export function buildPlanCsv(plan) {
 
 export const MESSAGES_COLS = ["pnr", "lang", "subject", "body"];
 
+/** Liste d'appel PAR HÔTEL (§8) : ce que l'escale lit au téléphone, hôtel par hôtel. */
+export const ROOMING_COLS = [
+  "hotel", "hotel_url", "chambres_hotel", "personnes_hotel", "mode_reglement",
+  "pnr", "titulaire", "occupants", "pax", "cabine", "overlays", "room_type", "chambres",
+  "prix_total", "devise", "conformite", "notes",
+];
+
+/**
+ * Le plan est trié par dossier : inexploitable pour appeler un hôtel. Cette sortie
+ * le regroupe par établissement, avec le total de chambres et de personnes en tête
+ * de chaque bloc — c'est la forme dont le comptoir a besoin pour négocier et pour
+ * appeler les passagers à la porte du bus.
+ */
+export function buildRoomingCsv(plan) {
+  const parHotel = new Map();
+  for (const row of plan) {
+    if (row.statut !== "OK" || !row.hotel) continue;
+    if (!parHotel.has(row.hotel)) parHotel.set(row.hotel, []);
+    parHotel.get(row.hotel).push(row);
+  }
+  const rows = [];
+  for (const [hotel, lignes] of [...parHotel.entries()].sort((a, b) => b[1].length - a[1].length)) {
+    const chambres = lignes.reduce((s2, r) => s2 + (Number(r.chambres) || 0), 0);
+    const personnes = lignes.reduce((s2, r) => s2 + (Number(r.pax) || 0), 0);
+    for (const r of lignes) {
+      rows.push({
+        hotel,
+        hotel_url: r.hotel_url ?? "",
+        chambres_hotel: chambres,
+        personnes_hotel: personnes,
+        mode_reglement: r.mode_reglement ?? "",
+        pnr: r.pnr,
+        titulaire: String(r.occupants ?? "").split(",")[0].trim(),
+        occupants: r.occupants ?? "",
+        pax: r.pax ?? "",
+        cabine: r.cabine ?? "",
+        overlays: r.overlays ?? "",
+        room_type: r.room_type ?? "",
+        chambres: r.chambres ?? "",
+        prix_total: r.prix_total ?? "",
+        devise: r.devise ?? "",
+        conformite: r.conformite ?? "",
+        notes: r.notes ?? "",
+      });
+    }
+  }
+  return toCsvBom(ROOMING_COLS, rows);
+}
+
 export function buildMessagesCsv(messages) {
   return toCsvBom(MESSAGES_COLS, messages);
 }
@@ -138,6 +187,28 @@ export function buildRapportMd(alloc, inventories, ctx) {
     } else if (a) {
       lines.push(`- found=false : ${a.notes || "sans détail"}`);
     }
+    lines.push("");
+  }
+
+  const parHotel = new Map();
+  for (const row of plan) {
+    if (row.statut !== "OK" || !row.hotel) continue;
+    const e = parHotel.get(row.hotel) ?? { chambres: 0, personnes: 0, dossiers: 0, url: row.hotel_url, reglement: row.mode_reglement };
+    e.chambres += Number(row.chambres) || 0;
+    e.personnes += Number(row.pax) || 0;
+    e.dossiers += 1;
+    parHotel.set(row.hotel, e);
+  }
+  if (parHotel.size) {
+    lines.push(`## À appeler — totaux par hôtel`);
+    lines.push("");
+    lines.push(`| Hôtel | Dossiers | Chambres | Personnes | Règlement |`);
+    lines.push(`|---|---|---|---|---|`);
+    for (const [hotel, e] of [...parHotel.entries()].sort((a, b) => b[1].chambres - a[1].chambres)) {
+      lines.push(`| ${hotel} | ${e.dossiers} | **${e.chambres}** | ${e.personnes} | ${e.reglement || "?"} |`);
+    }
+    lines.push("");
+    lines.push(`Détail nominatif par établissement : \`rooming-<runId>.csv\`. Aucune réservation n'est faite par l'outil (INV-1) : ces totaux sont ce qu'il faut demander à chaque hôtel.`);
     lines.push("");
   }
 

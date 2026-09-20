@@ -70,8 +70,9 @@ test("run simulé via le manager : snapshot complet, sorties §8, captures priv�
   assert.ok(snap.metricsTotals.steps > 0);
   assert.equal(snap.metricsTotals.cost_usd, 0);
 
-  // sorties §8 : 6 fichiers écrits et référencés
-  assert.equal(snap.outputs.length, 6);
+  // sorties §8 : 7 fichiers écrits et référencés (dont la liste d'appel par hôtel)
+  assert.equal(snap.outputs.length, 7);
+  assert.ok(snap.outputs.some((f) => f.startsWith("rooming-")), "liste d'appel par hôtel produite");
   for (const name of snap.outputs) {
     assert.ok(fs.existsSync(path.join(outDir, name)), `${name} écrit`);
     assert.ok(manager.isOutputAllowed(name));

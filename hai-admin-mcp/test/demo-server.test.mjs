@@ -9,6 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import { createDemoServer } from "../../demo/server.mjs";
 import { mkInv, mkInvEntry } from "./helpers.mjs";
+import { DEFAULT_POLICY } from "../lib/policy.mjs";
+
+const DEFAULT_POLICY_JSON = JSON.parse(JSON.stringify(DEFAULT_POLICY));
 
 function tmpDirs() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "pax-srv-"));
@@ -93,7 +96,7 @@ test("run simulé complet : 202 → 409 pendant, snapshot, messages, coût, tél
   const state = await call("GET", "/api/state");
   assert.equal(state.data.state, "done");
   assert.equal(state.data.plan.length, 157);
-  assert.equal(state.data.outputs.length, 6);
+  assert.equal(state.data.outputs.length, 7); // + rooming-<runId>.csv (liste d'appel par hôtel)
 
   const fr = await call("GET", `/api/messages?runId=${runId}&lang=fr`);
   assert.equal(fr.data.count, 157);
@@ -291,4 +294,35 @@ test("liste passagers : le dry-run part de la liste TÉLÉVERSÉE, et la source 
   assert.ok(bad.data.rapport.refus.length >= 1);
   const cfg2 = await call("GET", "/api/config");
   assert.equal(cfg2.data.uploaded, null);
+});
+
+test("rejeu gratuit : POST /api/replay rejoue l'allocation sur les relevés déjà payés, sans session", async (t) => {
+  const { app, call } = await boot(t);
+  const started = await call("POST", "/api/run", SIM_RUN);
+  assert.equal(started.status, 202);
+  const { runId } = started.data;
+  await app.manager.wait();
+  const base = (await call("GET", "/api/state")).data.planSummary;
+
+  // même politique : même plan, en quelques millisecondes et 0 €
+  const memePolitique = await call("POST", "/api/replay", { runId, scenario: { station: "BKK" } });
+  assert.equal(memePolitique.status, 200);
+  assert.equal(memePolitique.data.summary.ok, base.ok);
+  assert.ok(memePolitique.data.duree_ms < 3000);
+  assert.match(memePolitique.data.note, /aucune session/);
+
+  // plafond Y relevé : c'est LA question de séance, et elle se répond sans repayer un run
+  const plafondHaut = await call("POST", "/api/replay", {
+    runId,
+    scenario: { station: "BKK" },
+    policy: { ...DEFAULT_POLICY_JSON, cabins: { ...DEFAULT_POLICY_JSON.cabins, Y: { ...DEFAULT_POLICY_JSON.cabins.Y, price_cap_eur: 200 } } },
+  });
+  assert.equal(plafondHaut.status, 200);
+  assert.equal(plafondHaut.data.caps.Y, 200);
+  assert.ok(plafondHaut.data.summary.ok >= base.ok, "un plafond plus haut ne loge jamais moins de monde");
+
+  // run inconnu : 404 explicite, jamais un plan vide qui aurait l'air normal
+  const inconnu = await call("POST", "/api/replay", { runId: "zzzzzz", scenario: { station: "BKK" } });
+  assert.equal(inconnu.status, 404);
+  assert.match(inconnu.data.error, /relevés introuvables/);
 });

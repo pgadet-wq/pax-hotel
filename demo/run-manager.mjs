@@ -205,6 +205,7 @@ export function createRunManager({ hub, outDir }) {
     w(`plan-${result.runId}.csv`, result.outputs.planCsv);
     w(`rapport-${result.runId}.md`, result.outputs.rapportMd);
     w(`messages-${result.runId}.csv`, result.outputs.messagesCsv);
+    w(`rooming-${result.runId}.csv`, result.outputs.roomingCsv);
     w(`cout-${result.runId}.json`, JSON.stringify(result.cost, null, 2) + "\n");
     w(`candidats-${result.runId}.json`, JSON.stringify(result.candidates, null, 2) + "\n");
     w(`releves-${result.runId}.json`, JSON.stringify(result.inventories, null, 2) + "\n");
@@ -227,11 +228,11 @@ export function createRunManager({ hub, outDir }) {
      * @param {object} args {policy, avion, scenario, station, rows?, inventaire?, collectFactory, simulate}
      * @returns {{runId: string}} — le run continue en tâche de fond dans le process
      */
-    start({ policy, avion, scenario, station, rows = null, ingestion = null, inventaire = undefined, collectFactory, simulate = false }) {
+    start({ policy, avion, scenario, station, rows = null, ingestion = null, preflight = null, inventaire = undefined, collectFactory, simulate = false }) {
       if (st.state === "running") throw new HttpError(409, "un run est déjà en cours (INV-10)");
       const now = new Date();
       const runId = newRunId(now);
-      const { checkin, checkout } = resolveDates(scenario, now);
+      const { checkin, checkout } = resolveDates(scenario, now, station?.timezone ?? null);
 
       st = freshState();
       captureSources.clear();
@@ -259,6 +260,7 @@ export function createRunManager({ hub, outDir }) {
         avion,
         rows,
         ingestion,
+        preflight,
         inventaire,
         emit,
         signal: controller.signal,

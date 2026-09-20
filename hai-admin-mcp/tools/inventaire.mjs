@@ -3,6 +3,7 @@
  * Étage 0 — inventaire hôtelier par escale (CDC §6.1), partie HORS LIGNE (phase 2).
  *
  *   node hai-admin-mcp/tools/inventaire.mjs --station BKK --dry-run
+ *   node hai-admin-mcp/tools/inventaire.mjs --station BKK --preflight   # contrôle HTTP des fiches, 0 €
  *   node hai-admin-mcp/tools/inventaire.mjs --station BKK --offline data/simulate/inventaire-demo.json
  *
  *   --station <code>    escale (défaut BKK)
@@ -17,6 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { preflightUrls, resumePreflight } from "../lib/preflight.mjs";
 import { loadStation } from "../lib/stations.mjs";
 import { loadInventaire, mergeInventaire, normalizeInventaire, isStale, slugify, reconcileIds, INVENTAIRE_DIR } from "../lib/inventaire.mjs";
 import { buildNflt, buildSearchUrl, buildHotelUrl } from "../lib/hai-urls.mjs";
@@ -57,6 +59,39 @@ const CHECKOUT = (() => {
 })();
 
 const existing = loadInventaire(station.code);
+
+/* ----------------------------------------------------------------- pré-vol */
+
+// Contrôle HTTP des fiches de l'inventaire : GRATUIT, aucun agent (hors INV-8).
+// À jouer depuis la machine qui hébergera le run : un réseau qui intercepte les
+// requêtes (proxy d'entreprise, bac à sable) rend tous les verdicts indéterminés.
+if (flag("preflight")) {
+  const cibles = (existing?.hotels ?? []).filter((h) => h.url).map((h) => ({ id: h.id, name: h.name, url: h.url }));
+  const repli = (station.fallback_hotels ?? []).map((h) => ({ id: null, name: `${h.name} [repli fiche escale]`, url: h.url }));
+  const tout = [...cibles, ...repli];
+  if (!tout.length) {
+    console.log(`Inventaire ${station.code} : aucune URL à vérifier.`);
+    process.exit(0);
+  }
+  console.log(`Pré-vol ${station.code} : ${tout.length} fiche(s) — aucun agent, 0 €\n`);
+  const res = await preflightUrls(tout, { timeoutMs: Number(opt("timeout", "10000")), concurrency: 6 });
+  for (const r of res) {
+    const marque = { vivante: "OK  ", morte: "MORTE", redirigee: "REDIR", indeterminee: "?   " }[r.verdict];
+    console.log(`  ${marque} ${String(r.status ?? "—").padEnd(4)} ${r.name.slice(0, 48).padEnd(50)} ${r.detail}`);
+  }
+  const bilan = resumePreflight(res);
+  console.log(`\n${bilan.vivantes} vivante(s) · ${bilan.mortes.length} morte(s) · ${bilan.redirigees.length} redirigée(s) · ${bilan.indeterminees} indéterminée(s)`);
+  if (bilan.indeterminees === res.length) {
+    console.log("Aucun verdict ferme : le réseau de cette machine n'atteint pas Booking (proxy, anti-robot ou bac à sable).");
+    console.log("Rejouer depuis la machine du run, sinon le filet ne sert à rien.");
+  }
+  if (bilan.mortes.length || bilan.redirigees.length) {
+    console.log("\nÀ écarter de l'inventaire (`excluded: true`) ou à corriger :");
+    for (const r of [...bilan.mortes, ...bilan.redirigees]) console.log(`  - ${r.name} → ${r.detail}`);
+    process.exit(3);
+  }
+  process.exit(0);
+}
 
 /* ------------------------------------------------------------------ dry-run */
 

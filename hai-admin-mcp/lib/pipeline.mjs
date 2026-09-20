@@ -14,10 +14,11 @@ import { normalizePaxRows, splitPaxRows } from "./paxlist.mjs";
 import { allocate } from "./allocate.mjs";
 import { computeCost } from "./cout.mjs";
 import { buildMessages } from "./messages.mjs";
-import { buildPlanCsv, buildRapportMd, buildMessagesCsv } from "./rapport.mjs";
+import { buildPlanCsv, buildRapportMd, buildMessagesCsv, buildRoomingCsv } from "./rapport.mjs";
 import { loadInventaire, mergeInventaire, isStale, candidatesFrom, slugify } from "./inventaire.mjs";
 import { discoveryNeeded, candidateToEntry } from "./discovery.mjs";
 import { planExtension, applyProbeResult } from "./capacite.mjs";
+import { resolveConcurrency } from "./releve.mjs";
 import { resolveDates, newRunId, DEFAULT_AVION } from "./scenario.mjs";
 
 /** Collecteurs réels (sessions payantes — phases 5-6, INV-8 gardé par les CLI). */
@@ -39,6 +40,25 @@ export function realCollect(client) {
 }
 
 const cleanUrl = (u) => String(u ?? "").toLowerCase().split("?")[0].replace(/\/+$/, "");
+
+/** Exécute `fn` sur chaque élément avec au plus `n` en vol, en conservant l'ordre. */
+async function runPool(items, fn, n = 3) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(n, items.length)) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        out[i] = await fn(items[i], i);
+      } catch {
+        out[i] = null;
+      }
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 /**
  * Collecteur de fixtures (0 €) : sert les relevés depuis un tableau
@@ -102,7 +122,7 @@ export function fixturesCollect(records) {
  */
 export async function runPipeline({
   client = null, policy, station, scenario, avion = DEFAULT_AVION,
-  rows = null, dossiers = null, inventaire = undefined, ingestion: ingestionIn = null,
+  rows = null, dossiers = null, inventaire = undefined, ingestion: ingestionIn = null, preflight = null,
   emit = () => {}, signal = null, extensionSignal = null, collect = null, now = new Date(),
 }) {
   // les avertissements émis pendant le run alimentent la section « Avertissements » du rapport
@@ -114,7 +134,7 @@ export async function runPipeline({
   };
 
   const runId = newRunId(now);
-  const { checkin, checkout } = resolveDates(scenario, now);
+  const { checkin, checkout } = resolveDates(scenario, now, station?.timezone ?? null);
   const nights = scenario.nights;
   const groupId = `${station.code.toLowerCase()}-v2-${checkin}-${runId}`;
   const ctx = { policy, station, scenario, checkin, checkout, groupId, emit, signal };
@@ -193,7 +213,33 @@ export async function runPipeline({
   }
 
   /* candidats et sélection étage B (ordre EX-REL-3) */
-  const candidates = candidatesFrom(inv, policy, { station, needs: needs.parTier });
+  let candidates = candidatesFrom(inv, policy, { station, needs: needs.parTier });
+
+  // Pré-vol HTTP GRATUIT (aucun agent, hors INV-8) : une fiche morte coûterait une
+  // session payante puis une substitution en cascade. Seuls 404/410 et une
+  // redirection vers un autre établissement écartent un candidat ; un blocage
+  // anti-robot reste « indéterminé » et la fiche est conservée.
+  if (typeof preflight === "function" && candidates.length) {
+    emit("phase", { phase: "prevol", candidats: candidates.length });
+    try {
+      const res = await preflight(candidates.map((c) => ({ id: c.id, name: c.name, url: c.url })));
+      const ecartes = new Map();
+      for (const r of res ?? []) {
+        if (r.verdict === "morte" || r.verdict === "redirigee") ecartes.set(r.id ?? r.url, r);
+      }
+      emit("preflight", {
+        verifies: res?.length ?? 0,
+        ecartes: [...ecartes.values()].map((r) => ({ name: r.name, verdict: r.verdict, detail: r.detail })),
+        indeterminees: (res ?? []).filter((r) => r.verdict === "indeterminee").length,
+      });
+      for (const r of ecartes.values()) {
+        emit("warning", { message: `fiche écartée avant tout agent : « ${r.name} » — ${r.detail}` });
+      }
+      if (ecartes.size) candidates = candidates.filter((c) => !ecartes.has(c.id ?? c.url));
+    } catch (err) {
+      emit("warning", { message: `pré-vol des fiches impossible (${String(err?.message ?? err)}) — les relevés partent sans ce filet` });
+    }
+  }
   const maxB = policy.global.discovery.max_hotels_stage_b;
   const selection = candidates.slice(0, maxB).map((c) => ({ candidate: c, tiers: c.tiers }));
   const rest = candidates.slice(maxB);
@@ -226,7 +272,13 @@ export async function runPipeline({
   /* extension (CDC §6.4) */
   let wave = 1;
   let sessionsUsed = 0;
-  let costUsd = inventories.reduce((s, r) => s + (r.costUsd ?? 0), 0);
+  // le coût des SONDES est suivi à part : il était écrasé à chaque vague par le total
+  // des relevés, donc la borne `max_cost_usd_per_run` ne le voyait jamais et le bandeau
+  // affichait deux chiffres contradictoires
+  let probeCostUsd = 0;
+  const concurrence = resolveConcurrency(policy);
+  const totalCost = () => probeCostUsd + inventories.reduce((s2, r) => s2 + (r.costUsd ?? 0), 0);
+  let costUsd = totalCost();
   const probedKeys = new Set();
   let extensionStopReason = null;
   for (;;) {
@@ -256,17 +308,24 @@ export async function runPipeline({
     }
     emit("phase", { phase: "extension", wave });
 
-    for (const probe of plan.probes) {
-      if (aborted()) return finishCancelled();
-      if (extensionSignal?.aborted) break;
-      probedKeys.add(probe.hotelKey);
-      const answer = await collect.probe(ctx, probe);
-      sessionsUsed += 1;
-      costUsd += answer?.costUsd ?? 0;
-      if (answer) {
-        const updated = applyProbeResult(inventories, probe.hotelKey, answer);
+    // Sondes EN PARALLÈLE (elles étaient strictement séquentielles : 5 sondes en file
+    // indienne pendant que les créneaux de concurrence dormaient, ~7 min de séance).
+    const probesAJouer = plan.probes.filter(() => !aborted() && !extensionSignal?.aborted);
+    for (const probe of probesAJouer) probedKeys.add(probe.hotelKey);
+    if (probesAJouer.length) {
+      const answers = await runPool(probesAJouer, (probe) => collect.probe(ctx, probe), concurrence);
+      sessionsUsed += probesAJouer.length;
+      for (const answer of answers) probeCostUsd += answer?.costUsd ?? 0;
+      let applique = false;
+      answers.forEach((answer, i) => {
+        if (!answer) return;
+        const updated = applyProbeResult(inventories, probesAJouer[i].hotelKey, answer);
         inventories.length = 0;
         inventories.push(...updated);
+        applique = true;
+      });
+      costUsd = totalCost();
+      if (applique) {
         alloc = allocate({ dossiers, inventories, policy, station, nights, provisoire: true });
         emitPlan(alloc, true);
       }
@@ -276,7 +335,7 @@ export async function runPipeline({
       await collect.releves(ctx, plan.surveys.map((c) => ({ candidate: c, tiers: c.tiers })), {}, onInventory);
       for (const c of plan.surveys) surveyedKeys.add(c.id);
       sessionsUsed += inventories.length - before;
-      costUsd = inventories.reduce((s, r) => s + (r.costUsd ?? 0), 0);
+      costUsd = totalCost();
     }
     wave += 1;
   }
@@ -300,6 +359,7 @@ export async function runPipeline({
       extension: { waves: wave - 1, probes: probedKeys.size, surveys: Math.max(0, surveyedKeys.size - selection.length), limits: { sessions_used: sessionsUsed, sessions_max: policy.extension.max_sessions_per_run, cost_usd: costUsd, cost_max: policy.extension.max_cost_usd_per_run } },
     }),
     messagesCsv: buildMessagesCsv(messages),
+    roomingCsv: buildRoomingCsv(alloc.plan),
   };
   emit("done", { runId, ok: alloc.summary.ok, escalade: alloc.summary.escalade, sessions_used: sessionsUsed, cost_usd: costUsd, extension_stop: extensionStopReason });
 

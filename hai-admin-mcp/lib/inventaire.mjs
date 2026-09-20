@@ -297,3 +297,22 @@ export function candidatesFrom(inv, policy, { station = null, needs = null } = {
 
   return [...entries, ...fallbacks];
 }
+
+/**
+ * Capacité INDICATIVE du vivier de candidats, pour dire AVANT de payer si l'inventaire
+ * peut couvrir le besoin. Le run réel du 16/09 s'est arrêté « épuisé » avec 6 sessions
+ * et 8 $ de budget restants : ce qui manquait, c'étaient des hôtels, pas de l'argent.
+ *
+ * Borne basse assumée : `capacity_hint.rooms_displayed_max` quand il existe, sinon
+ * `defautParHotel` (le sélecteur Booking plafonne l'affichage autour de 9 par type).
+ */
+export function capaciteIndicative(candidates, { defautParHotel = 9 } = {}) {
+  let connue = 0;
+  let estimee = 0;
+  for (const c of candidates ?? []) {
+    const hint = c.capacity_hint?.rooms_displayed_max;
+    if (Number.isFinite(hint) && hint > 0) connue += hint;
+    else estimee += defautParHotel;
+  }
+  return { hotels: candidates?.length ?? 0, connue, estimee, total: connue + estimee };
+}

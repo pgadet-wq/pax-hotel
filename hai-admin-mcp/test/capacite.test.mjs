@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { detectCap, planExtension, applyProbeResult } from "../lib/capacite.mjs";
 import { DEFAULT_POLICY, PolicySchema } from "../lib/policy.mjs";
+import { allocate } from "../lib/allocate.mjs";
 import { mkRoom, mkHotel, mkRecord, STATION_BKK } from "./helpers.mjs";
 
 const politique = (over = {}) => {
@@ -181,4 +182,26 @@ test("capacite : runProbe — model_probe « auto » : aucun override de modèle
     checkin: "2026-10-04", checkout: "2026-10-05", groupId: "g", emit: () => {},
   });
   assert.equal("agent.model" in startArgs.overrides, false);
+});
+
+test("sonde : le maximum observé est un supplément PARTAGÉ, jamais recopié par type ni plafond global", () => {
+  const rooms = ["King", "Twin", "Suite"].map((t) =>
+    mkRoom({ room_type: t, quantity_available: 9, quantity_displayed_max: 9, cap_reached: true, price_per_night: 60 }),
+  );
+  const inv = mkHotel("h1", {}, rooms);
+  const dossiers = Array.from({ length: 80 }, (_, i) => ({
+    pnr: `P${i}`, occupants: "x", adults: 1, children: 0, infants: 0, cabin: "Y", fb: "NONE",
+    overlays: { pmr: false, famille: false }, familyUnit: false, rooms: 1, file: "Y",
+  }));
+
+  // sans sonde : on ne prend que ce qui est affiché (3 × 9)
+  const sans = allocate({ dossiers, inventories: [inv], policy: DEFAULT_POLICY, station: STATION_BKK });
+  assert.equal(sans.summary.ok, 27, "quantité affichée");
+
+  // avec une sonde à 30 : 27 affichées + 30 de supplément partagé = 57 — et surtout PAS 90
+  const sonde = applyProbeResult([inv], "h1", { found: true, rooms_selectable_max: 30 });
+  const avec = allocate({ dossiers, inventories: sonde, policy: DEFAULT_POLICY, station: STATION_BKK });
+  assert.equal(avec.summary.ok, 57, "le maximum de sonde est partagé entre les types, pas multiplié par leur nombre");
+  assert.ok(avec.summary.ok >= sans.summary.ok, "une sonde ne doit jamais faire DISPARAÎTRE du stock affiché");
+  assert.equal(sonde[0].answer.rooms_available_max_hotel, 30);
 });

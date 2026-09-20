@@ -66,7 +66,7 @@ test("run simulé complet : phases §5.8 ordonnées, vague 1 = 1 sonde + 1 relev
   // sonde : starting puis completed avec résultat borné (EX-EXT-1)
   const probes = events.filter((e) => e.type === "probe").map((e) => e.data);
   assert.equal(probes[0].status, "starting");
-  assert.deepEqual(probes.at(-1).result, { rooms_available_max: 30, cap_reached: false });
+  assert.deepEqual(probes.at(-1).result, { rooms_available_max: 40, cap_reached: false });
 
   // agents : 6 relevés (5 étage B + amaranth en vague 1), pensées FR, captures, métriques 0 $
   const agentKeys = new Set(events.filter((e) => e.type === "agent_status").map((e) => e.hotel_key));

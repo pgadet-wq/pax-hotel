@@ -65,13 +65,37 @@ export function mergeConfig(payload = {}) {
 
 const localIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
+/** Date du jour DANS le fuseau de l'escale (défaut : fuseau du serveur). */
+export function localDateIn(now = new Date(), timezone = null) {
+  if (!timezone) return localIso(now);
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  } catch {
+    return localIso(now);
+  }
+}
+
+/** Heure locale de l'escale, pour que l'opérateur confirme LA BONNE NUIT (« 03:14 à Bangkok »). */
+export function stationClock(now = new Date(), timezone = null) {
+  if (!timezone) return { date: localIso(now), heure: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`, timezone: null };
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+    const parts = Object.fromEntries(fmt.formatToParts(now).map((x) => [x.type, x.value]));
+    return { date: `${parts.year}-${parts.month}-${parts.day}`, heure: `${parts.hour}:${parts.minute}`, timezone };
+  } catch {
+    return { date: localIso(now), heure: "", timezone };
+  }
+}
+
 /**
- * Résout les dates effectives du run : arrivée du vol (défaut : AUJOURD'HUI en heure
- * locale — le vol est immobilisé maintenant) et fin d'hébergement. Calculs en local :
- * toISOString() rebasculerait en UTC et décalerait d'un jour à l'est de Greenwich.
+ * Résout les dates effectives du run : arrivée du vol (défaut : AUJOURD'HUI dans le
+ * fuseau DE L'ESCALE — le vol y est immobilisé maintenant) et fin d'hébergement.
+ * Sans fuseau, repli sur l'heure du serveur ; c'était le comportement d'avant, et il
+ * fait relever la nuit SUIVANTE dès que serveur et escale ne sont pas le même jour
+ * (Nouméa UTC+11 ou Paris UTC+2 vs Bangkok UTC+7).
  */
-export function resolveDates(scenario, now = new Date()) {
-  const checkin = scenario.checkin ?? localIso(now);
+export function resolveDates(scenario, now = new Date(), timezone = null) {
+  const checkin = scenario.checkin ?? localDateIn(now, timezone);
   const d = new Date(`${checkin}T00:00:00`);
   d.setDate(d.getDate() + scenario.nights);
   return { checkin, checkout: localIso(d) };

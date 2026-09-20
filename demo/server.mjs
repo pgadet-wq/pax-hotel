@@ -17,12 +17,15 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_POLICY, PolicySchema, effectiveCaps, AMENITY_KEYS, AMENITY_LABELS } from "../hai-admin-mcp/lib/policy.mjs";
-import { DEFAULT_AVION, DEFAULT_SCENARIO, mergeConfig, resolveDates } from "../hai-admin-mcp/lib/scenario.mjs";
+import { DEFAULT_AVION, DEFAULT_SCENARIO, mergeConfig, resolveDates, stationClock } from "../hai-admin-mcp/lib/scenario.mjs";
 import { loadStation, listStations } from "../hai-admin-mcp/lib/stations.mjs";
-import { loadInventaire, normalizeInventaire, isStale, candidatesFrom, slugify, INVENTAIRE_DIR } from "../hai-admin-mcp/lib/inventaire.mjs";
+import { loadInventaire, normalizeInventaire, isStale, candidatesFrom, slugify, capaciteIndicative, INVENTAIRE_DIR } from "../hai-admin-mcp/lib/inventaire.mjs";
 import { generatePassengers } from "../hai-admin-mcp/lib/passagers.mjs";
 import { ingestPassagers, IngestError } from "../hai-admin-mcp/lib/paxlist.mjs";
 import { buildDossiers, computeNeeds } from "../hai-admin-mcp/lib/dossiers.mjs";
+import { allocate } from "../hai-admin-mcp/lib/allocate.mjs";
+import { computeCost } from "../hai-admin-mcp/lib/cout.mjs";
+import { preflightUrls } from "../hai-admin-mcp/lib/preflight.mjs";
 import { discoveryNeeded } from "../hai-admin-mcp/lib/discovery.mjs";
 import { planExtension } from "../hai-admin-mcp/lib/capacite.mjs";
 import { buildHotelUrl } from "../hai-admin-mcp/lib/hai-urls.mjs";
@@ -245,7 +248,7 @@ export function createDemoServer(opts = {}) {
   /** Dry-run synchrone (aucun agent) : besoins, inventaire, décision, URLs, extension théorique. */
   function dryRun({ policy, avion, scenario }, body = {}) {
     const station = loadStation(scenario.station);
-    const { checkin, checkout } = resolveDates(scenario);
+    const { checkin, checkout } = resolveDates(scenario, new Date(), station.timezone);
     // la source de liste vient de la RACINE du corps : `ScenarioSchema` ne déclare pas
     // `passengers`, zod la supprimerait du scénario (le dry-run partirait sur la liste générée)
     const rows = uploadedRowsFor(body) ?? generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" }).rows;
@@ -268,6 +271,12 @@ export function createDemoServer(opts = {}) {
       passagers: rows.length, dossiers: dossiers.length,
       source_liste: uploadedRowsFor(body) ? "téléversée" : "générée",
       uploaded: uploadedInfo,
+      heure_escale: stationClock(new Date(), station.timezone),
+      couverture: (() => {
+        const besoin = ["J", "W", "Y"].reduce((n, t) => n + (needs.parTier[t]?.chambres ?? 0), 0);
+        const cap = capaciteIndicative(candidates);
+        return { besoin_chambres: besoin, ...cap, suffisant: cap.total >= besoin };
+      })(),
       caps: effectiveCaps(policy, station),
       needs: needs.parTier,
       inventaire: { hotels: inv?.hotels?.length ?? 0, updated_at: inv?.updated_at ?? null, stale: isStale(inv, policy) },
@@ -313,6 +322,8 @@ export function createDemoServer(opts = {}) {
       const client = await getHaiClient();
       const { runId } = manager.start({
         policy, avion, scenario, station, rows, ingestion: rows ? uploadedRapport : null,
+        // filet gratuit : les fiches mortes sont écartées avant la première session payante
+        preflight: (candidats) => preflightUrls(candidats, { timeoutMs: 8000, concurrency: 6 }),
         simulate: false,
         collectFactory: () => realCollect(client),
       });
@@ -332,6 +343,89 @@ export function createDemoServer(opts = {}) {
       collectFactory: ({ signal, extensionSignal }) => createSimulation({ speed, signal, extensionSignal }),
     });
     sendJson(res, 202, { runId, simulate: true, sim_speed: speed });
+  }
+
+  /**
+   * POST /api/replay — rejoue l'ALLOCATION sur les relevés déjà payés d'un run.
+   * Aucune session, aucun euro : c'est la réponse à « et si on montait le plafond Y ? »,
+   * qui coûtait sinon un run complet (25 min, ~2,5 $, et un stock Booking qui a bougé).
+   */
+  function postReplay(body, res) {
+    const runId = String(body.runId ?? "").replace(/[^a-z0-9]/gi, "");
+    if (!runId) throw new HttpError(400, "runId manquant");
+    const fichier = path.join(dirs.outDir, `releves-${runId}.json`);
+    if (!fs.existsSync(fichier)) throw new HttpError(404, `relevés introuvables pour le run ${runId} (fichier out/releves-${runId}.json)`);
+    let inventories;
+    try {
+      inventories = JSON.parse(fs.readFileSync(fichier, "utf8"));
+    } catch (err) {
+      throw new HttpError(500, `relevés illisibles : ${String(err.message)}`);
+    }
+    let config;
+    try {
+      config = mergeConfig(body);
+    } catch (err) {
+      throw new HttpError(400, `politique invalide : ${err.issues?.map((i) => `${i.path.join(".")} ${i.message}`).join(" ; ") ?? err.message}`);
+    }
+    const { policy, avion, scenario } = config;
+    const station = loadStation(scenario.station);
+    const rows = uploadedRowsFor(body) ?? generatePassengers({ seats: avion.seats, seed: scenario.seed, fill: "exact" }).rows;
+    const t0 = Date.now();
+    const dossiers = buildDossiers(rows, policy);
+    const alloc = allocate({ dossiers, inventories, policy, station, nights: scenario.nights, provisoire: false });
+    const cost = computeCost(alloc.plan, policy, scenario, { avion, station });
+    return sendJson(res, 200, {
+      runId,
+      source_liste: uploadedRowsFor(body) ? "téléversée" : "générée",
+      duree_ms: Date.now() - t0,
+      caps: effectiveCaps(policy, station),
+      summary: alloc.summary,
+      gaps: alloc.gaps,
+      cost,
+      hotels: [...new Set(alloc.plan.filter((r) => r.statut === "OK").map((r) => r.hotel))].length,
+      note: "rejeu hors ligne sur les relevés déjà payés — aucune session d'agent, 0 $",
+    });
+  }
+
+  /**
+   * GET /api/health — état d'exploitation AVANT de payer : clé présente, longueur et
+   * empreinte (jamais la clé), garde INV-8, et quota H si l'appel gratuit répond.
+   * L'incident du 16/09 (clé tronquée à la saisie) a coûté 10 minutes de séance et
+   * une cascade de 403 indiscernables d'échecs d'hôtels.
+   */
+  async function getHealth(res) {
+    const brute = process.env.HAI_API_KEY ?? "";
+    const cle = brute.trim();
+    const out = {
+      paid_allowed: paidAllowed(),
+      cle_presente: Boolean(cle),
+      cle_longueur: cle.length,
+      cle_espaces_parasites: cle.length !== brute.length,
+      cle_empreinte: null,
+      quota: null,
+      verdict: "clé absente",
+    };
+    if (cle) {
+      const { createHash } = await import("node:crypto");
+      out.cle_empreinte = createHash("sha256").update(cle).digest("hex").slice(0, 8);
+      out.verdict = "clé présente — non vérifiée auprès de H";
+      if (/^(a_saisir|xxx|todo|changeme)/i.test(cle)) out.verdict = "clé de remplacement (placeholder) : le run échouerait en 403";
+    }
+    if (cle && out.verdict.startsWith("clé présente")) {
+      try {
+        const client = await getHaiClient();
+        const quota = await (client.quota?.getTokenQuota?.() ?? client.sessions?.getSessionQuota?.() ?? Promise.reject(new Error("aucun point de quota exposé par le SDK")));
+        out.quota = quota ?? null;
+        out.verdict = "clé VALIDE (quota lu, aucune session créée)";
+      } catch (err) {
+        const msg = String(err?.message ?? err);
+        out.quota_erreur = msg.slice(0, 300);
+        out.verdict = /403|401|deny|unauthor/i.test(msg)
+          ? "clé REFUSÉE par la plateforme (403/401) — ne pas lancer le run"
+          : "clé non vérifiable (quota indisponible) — vérifier manuellement avant le run";
+      }
+    }
+    return sendJson(res, 200, out);
   }
 
   /** GET /api/screenshot?hotel=&seq= — proxy par clés d'état internes (§11). */
@@ -475,6 +569,10 @@ export function createDemoServer(opts = {}) {
           return sendJson(res, 200, manager.cancelExtension());
         case "GET /api/events":
           return hub.handle(req, res, manager.snapshot);
+        case "POST /api/replay":
+          return postReplay(parseJson(await readBody(req)), res);
+        case "GET /api/health":
+          return await getHealth(res);
         case "GET /api/state":
           return sendJson(res, 200, manager.snapshot());
         case "GET /api/screenshot":

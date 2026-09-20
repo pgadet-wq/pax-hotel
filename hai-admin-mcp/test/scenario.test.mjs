@@ -33,3 +33,24 @@ test("scenario : resolveDates — défaut aujourd'hui en heure LOCALE, checkout 
   const fixed = resolveDates({ checkin: "2026-12-31", nights: 1 }, now);
   assert.deepEqual(fixed, { checkin: "2026-12-31", checkout: "2027-01-01" });
 });
+
+test("scenario : la nuit est datée dans le fuseau DE L'ESCALE, pas dans celui du serveur", () => {
+  // 18:00 UTC = 19/09 à Paris (UTC+2) et à Nouméa (UTC+11 → déjà le 20), mais
+  // 01:00 le 20/09 à Bangkok : c'est la nuit du 20 qu'il faut relever.
+  const now = new Date("2026-09-19T18:00:00Z");
+  const bkk = resolveDates({ checkin: null, nights: 1 }, now, "Asia/Bangkok");
+  assert.equal(bkk.checkin, "2026-09-20");
+  assert.equal(bkk.checkout, "2026-09-21");
+  const paris = resolveDates({ checkin: null, nights: 1 }, now, "Europe/Paris");
+  assert.equal(paris.checkin, "2026-09-19", "le même instant ne donne pas la même nuit");
+  // une date forcée par l'opérateur fait toujours foi
+  assert.equal(resolveDates({ checkin: "2026-12-31", nights: 1 }, now, "Asia/Bangkok").checkin, "2026-12-31");
+  // fuseau inconnu : repli sans exception
+  assert.match(resolveDates({ checkin: null, nights: 1 }, now, "Pas/UnFuseau").checkin, /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test("scenario : stationClock donne l'heure locale de l'escale pour confirmer la nuit", async () => {
+  const { stationClock } = await import("../lib/scenario.mjs");
+  const c = stationClock(new Date("2026-09-19T18:00:00Z"), "Asia/Bangkok");
+  assert.deepEqual({ date: c.date, heure: c.heure }, { date: "2026-09-20", heure: "01:00" });
+});

@@ -94,8 +94,15 @@ export function planExtension({
 }
 
 /**
- * Applique le résultat d'une sonde : borne `rooms_available_max` posée sur les
- * types plafonnés de l'hôtel (EX-ALL-5). Non mutant — retourne une copie.
+ * Applique le résultat d'une sonde (EX-ALL-5). Non mutant — retourne une copie.
+ *
+ * `rooms_selectable_max` est le maximum sélectionnable observé POUR L'HÔTEL, pas par
+ * type de chambre : le recopier sur chaque type plafonné multiplierait la capacité
+ * par le nombre de types (mesuré : un hôtel à 23 chambres réelles et 3 types
+ * plafonnés en déclarait 90, et le plan affichait des chambres qui n'existent pas).
+ * Il est donc posé comme PLAFOND D'HÔTEL (`rooms_available_max_hotel`), que
+ * l'allocation applique au TOTAL pris chez cet hôtel ; les types plafonnés reçoivent
+ * la borne pour ne plus être bloqués à leur quantité affichée.
  */
 export function applyProbeResult(inventories, hotelKey, probeAnswer) {
   const max = probeAnswer?.found ? probeAnswer.rooms_selectable_max : -1;
@@ -105,7 +112,10 @@ export function applyProbeResult(inventories, hotelKey, probeAnswer) {
       ...inv,
       answer: {
         ...inv.answer,
-        rooms: inv.answer.rooms.map((r) => (r.cap_reached && r.rooms_available_max == null ? { ...r, rooms_available_max: max } : r)),
+        rooms_available_max_hotel: max,
+        rooms: inv.answer.rooms.map((r) =>
+          r.cap_reached && r.rooms_available_max == null ? { ...r, rooms_available_max: max, rooms_max_is_hotel_cap: true } : r,
+        ),
       },
     };
   });
