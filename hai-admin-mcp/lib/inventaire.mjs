@@ -48,7 +48,15 @@ const HotelEntrySchema = z.object({
    * Sans ce champ au schema, zod retirait la couronne a l'ecriture : le marquage pose par
    * la decouverte ne survivait pas au run, et tout hotel redevenait de couronne inconnue.
    * Un hotel revu dans une couronne plus lointaine garde la plus PROCHE ou il a ete vu. */
-  couronne: z.number().int().min(1).max(9).nullable().default(null),
+  couronne: z
+    .object({
+      rang: z.number().int().min(1).max(9),
+      rayon_m: z.number().int().nullable().default(null),
+      trajet_min_declare: z.number().int().nullable().default(null),
+      mode: z.string().default(""),
+    })
+    .nullable()
+    .default(null),
   amenities: z
     .object({
       wifi_free: z.boolean().nullable().default(null),

@@ -141,6 +141,41 @@ test("frontière : un lead ne part JAMAIS en relevé et n'entre JAMAIS au plan",
   assert.equal(leads[0].contact.phone, "+66 2 555 0000");
 });
 
+test("aller-retour au schéma : une entrée de découverte survit à l'écriture d'inventaire", () => {
+  // RÉGRESSION du 21/09, trouvée par un run RÉEL tombé en erreur à 0,29 $ : le champ
+  // `couronne` avait été déclaré `z.number()` alors que `couronneEntree()` y met un OBJET
+  // {rang, rayon_m, trajet_min_declare, mode}. Résultat : « inventaire frais invalide »
+  // sur les 12 hôtels, run perdu après la découverte. Aucun test ne faisait passer une
+  // entrée fraîchement construite par le schéma — c'est ce que fait celui-ci.
+  const couronne = { rang: 2, rayon_m: 15000, trajet_min: 35, mode: "taxi" };
+  const plateforme = candidateToEntry(
+    { name: "Test Plateforme", url: "https://exemple/x", price_from_per_night: 80, stars: 4 },
+    { sourceCle: "booking", nature: "plateforme", couronne },
+  );
+  const lead = candidateToEntry(
+    { name: "Test Annuaire", phone: "+66 2 000 0000", address: "1 rue X", review_score: 8 },
+    { sourceCle: "maps", nature: "annuaire", couronne },
+  );
+
+  const inv = normalizeInventaire({
+    station: "BKK", updated_at: "2026-09-21T00:00:00.000Z", reference: null,
+    hotels: [plateforme, lead],
+  });
+
+  assert.equal(inv.hotels.length, 2, "le schéma a rejeté une entrée pourtant produite par le moteur");
+  const [p, l] = inv.hotels;
+  // la couronne doit SURVIVRE : c'est la source que l'allocation juge la plus fiable,
+  // devant distance_km (nulle ou fausse sur 6 hôtels de BKK sur 9)
+  assert.equal(p.couronne?.rang, 2);
+  assert.equal(p.couronne?.trajet_min_declare, 35);
+  assert.equal(p.couronne?.mode, "taxi");
+  // et la source, le téléphone et l'adresse d'un lead aussi
+  assert.equal(l.source, "lead");
+  assert.equal(l.source_cle, "maps");
+  assert.equal(l.contact.phone, "+66 2 000 0000");
+  assert.equal(l.adresse, "1 rue X");
+});
+
 test("bornes : les défauts tiennent les 40 hôtels visés", () => {
   const d = DEFAULT_POLICY.global.discovery;
   const e = DEFAULT_POLICY.extension;
