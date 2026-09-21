@@ -24,7 +24,16 @@ const HotelEntrySchema = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,60}$/, "id en minuscules [a-z0-9-]"),
   name: z.string().min(1),
   url: z.string().default(""),
-  source: z.enum(["agent", "manuel"]),
+  /** `lead` = trouve par un ANNUAIRE (Maps) : nom, adresse, telephone, aucun prix public.
+   * Un lead n'est JAMAIS alloue au plan (INV-3 : prix publics uniquement) ; il alimente le
+   * vivier de repli a appeler. Il est PROMU en `agent` des que son nom se recoupe avec un
+   * candidat de plateforme, sans depenser de session supplementaire. */
+  source: z.enum(["agent", "manuel", "lead"]),
+  /** Source d'origine (booking, agoda, tripcom, expedia, maps) — trace d'audit et
+   * diagnostic : savoir quelle source rapporte permet d'arreter celles qui ne rapportent pas. */
+  source_cle: z.string().default(""),
+  /** Adresse postale, remplie par l'annuaire. Vide = non relevee, jamais inventee. */
+  adresse: z.string().default(""),
   contracted: z.boolean().default(false),
   preferred: z.boolean().default(false),
   excluded: z.boolean().default(false),
@@ -266,6 +275,23 @@ function entryScore(entry, tier, policy, station, caps) {
  * @param {object} policy politique validée
  * @param {object} [opts] {station : fiche escale (replis, rayon, facteur), needs : computeNeeds().parTier}
  */
+/**
+ * VIVIER DE REPLI A APPELER : les etablissements connus par annuaire seulement.
+ *
+ * Ils n'entrent jamais au plan (aucun prix public, INV-3) et ne consomment aucune session
+ * de releve. Ce qu'ils apportent, et que le plan ne peut pas donner : un nom, une adresse
+ * et un TELEPHONE — de quoi trouver des chambres la ou aucune plateforme ne regarde.
+ * C'est la reponse concrete a « le vivier en ligne ne suffit pas pour 250 passagers ».
+ *
+ * @param {object} inv inventaire charge
+ * @returns {Array<object>} leads non exclus, les mieux notes d'abord
+ */
+export function leadsDe(inv) {
+  return (inv?.hotels ?? [])
+    .filter((h) => h.source === "lead" && !h.excluded)
+    .sort((a, b) => (b.review_score ?? 0) - (a.review_score ?? 0));
+}
+
 export function candidatesFrom(inv, policy, { station = null, needs = null } = {}) {
   const caps = effectiveCaps(policy, station);
   const needyTiers = needs
@@ -274,7 +300,10 @@ export function candidatesFrom(inv, policy, { station = null, needs = null } = {
   const tiersToScore = needyTiers.length ? needyTiers : ["J", "W", "Y"];
 
   const entries = (inv?.hotels ?? [])
-    .filter((h) => !h.excluded)
+    // un LEAD d'annuaire n'a NI page reservable NI prix public : l'envoyer au releve
+    // depenserait une session pour rien, et l'allouer au plan violerait INV-3. Il sort
+    // du circuit de relevé et alimente le vivier de repli a appeler (`leadsDe`).
+    .filter((h) => !h.excluded && h.source !== "lead")
     .map((h) => ({
       ...h,
       fallback: false,

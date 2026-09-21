@@ -78,8 +78,9 @@ describe("C5 — budget d'horloge du run", () => {
     assert.deepEqual(stop.surveys, []);
     // les trois autres bornes rendent la même forme d'arrêt
     assert.match(planExtension({ ...base, policy, wave: 9 }).reason, /max_waves/);
-    assert.match(planExtension({ ...base, policy, sessionsUsed: 18 }).reason, /max_sessions_per_run/);
-    assert.match(planExtension({ ...base, policy, costUsd: 10 }).reason, /max_cost_usd_per_run/);
+    // defauts releves le 21/09 : 18 -> 50 sessions, 10 -> 15 $ (40 hotels multi-sources)
+    assert.match(planExtension({ ...base, policy, sessionsUsed: 50 }).reason, /max_sessions_per_run/);
+    assert.match(planExtension({ ...base, policy, costUsd: 15 }).reason, /max_cost_usd_per_run/);
   });
 
   test("C5 : sans horloge fournie, l'extension ne s'arrête jamais sur ce critère", () => {

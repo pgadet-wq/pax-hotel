@@ -439,6 +439,99 @@ export function buildNflt(policy, station, options = {}) {
 }
 
 /** URL de recherche de zone (page de résultats) pour une passe de découverte. */
+/**
+ * Points d'entree des sources de decouverte autres que Booking (21/09/2026).
+ *
+ * PRINCIPE, qui explique pourquoi il n'y a pas de filtres ici : les codes de filtre de
+ * Booking (`nflt`) ont ete RELEVES sur pieces ; ceux d'Agoda, Trip.com et Expedia ne l'ont
+ * pas ete. Le projet s'interdit d'inventer un code — un filtre errone ne rend pas une
+ * erreur, il rend ZERO resultat et vide le vivier en silence. Ces plateformes sont donc
+ * abordees par RECHERCHE MANUELLE (l'agent tape la destination et regle les dates), et
+ * l'URL ci-dessous n'est qu'un point d'entree. Le tri et la conformite restent faits par
+ * le moteur, apres coup, comme pour Booking.
+ *
+ * Google Maps est un ANNUAIRE : la requete porte la zone, pas des dates. Il en revient des
+ * noms, des adresses et des TELEPHONES — pas des prix. INV-2 : si la page oppose un
+ * CAPTCHA, l'agent le signale et s'arrete, il ne le contourne jamais.
+ */
+export const SOURCES_ENTREE = {
+  booking: {
+    nature: "plateforme",
+    entree: ({ station }) => buildSearchUrl({ station, checkin: null, checkout: null, nflt: "" }),
+    filtres_releves: true,
+  },
+  agoda: {
+    nature: "plateforme",
+    entree: () => "https://www.agoda.com/",
+    filtres_releves: false,
+    note: "fort en Asie du Sud-Est : reference des etablissements absents de Booking",
+  },
+  tripcom: {
+    nature: "plateforme",
+    entree: () => "https://www.trip.com/hotels/",
+    filtres_releves: false,
+    note: "",
+  },
+  expedia: {
+    nature: "plateforme",
+    entree: () => "https://www.expedia.fr/Hotels",
+    filtres_releves: false,
+    note: "",
+  },
+  maps: {
+    nature: "annuaire",
+    entree: ({ station, rayonM = null }) => mapsSearchUrl(station, rayonM),
+    filtres_releves: false,
+    note: "rend nom + adresse + telephone, jamais de prix ni de disponibilite",
+  },
+};
+
+/**
+ * URL de recherche d'annuaire pour la zone d'une escale.
+ * Aucun parametre de rayon n'est envoye : Maps n'en accepte pas de fiable dans l'URL, et
+ * le rayon se juge sur l'adresse au retour. Le rayon passe ici ne sert qu'au libelle.
+ *
+ * @param {object} station fiche escale
+ * @param {number|null} [rayonM] rayon vise, pour le libelle de la requete seulement
+ * @returns {string}
+ */
+export function mapsSearchUrl(station, rayonM = null) {
+  const zone = station?.search?.zone_query ?? station?.name ?? "";
+  const km = rayonM ? ` dans un rayon de ${Math.round(rayonM / 1000)} km` : "";
+  return `https://www.google.com/maps/search/${encodeURIComponent(`hôtels près de ${zone}${km}`)}`;
+}
+
+/**
+ * Sources ACTIVES de la politique, triees par rang, avec leur point d'entree resolu.
+ * Une source inconnue du catalogue est ignoree AVEC un avertissement : jamais en silence.
+ *
+ * @returns {{sources: Array<object>, avertissements: string[]}}
+ */
+export function sourcesActives(policy, station, { rayonM = null } = {}) {
+  const avertissements = [];
+  const brut = policy?.global?.discovery?.sources ?? [];
+  const sources = [];
+  for (const src of [...brut].sort((a, b) => a.rang - b.rang)) {
+    if (!src.actif) continue;
+    const def = SOURCES_ENTREE[src.cle];
+    if (!def) {
+      avertissements.push(`source de découverte « ${src.cle} » inconnue du catalogue — ignorée`);
+      continue;
+    }
+    sources.push({
+      cle: src.cle,
+      nature: def.nature,
+      rang: src.rang,
+      max_candidats: src.max_candidats,
+      entree: def.entree({ station, rayonM }),
+      filtres_releves: def.filtres_releves,
+      note: def.note ?? "",
+    });
+  }
+  if (!sources.length) avertissements.push("aucune source de découverte active : le vivier se limite à l'inventaire déjà fiché");
+  return { sources, avertissements };
+}
+
 export function buildSearchUrl({ station, checkin, checkout, nflt }) {
   const p = new URLSearchParams({
     ss: station.search.zone_query,

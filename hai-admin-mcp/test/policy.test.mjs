@@ -16,7 +16,7 @@ test("policy : DEFAULT_POLICY valide, ajouts CDC présents (allowances, payment,
   assert.equal(p.payment.prepaid_card.enabled, true);
   assert.deepEqual(
     { waves: p.extension.max_waves, sessions: p.extension.max_sessions_per_run, cost: p.extension.max_cost_usd_per_run },
-    { waves: 4, sessions: 18, cost: 10 }, // H-2 fixée le 14/09
+    { waves: 4, sessions: 50, cost: 15 }, // H-2 fixée le 14/09, relevée le 21/09 (multi-sources, 40 hôtels)
   );
   assert.equal(p.agents.concurrency, "auto");
   assert.equal(p.inventory.max_age_days, 30);

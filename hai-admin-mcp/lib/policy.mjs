@@ -99,6 +99,64 @@ export const CRITERES_DEFAUT = [
   { cle: "flying_blue", actif: true, rang: 99, proximite: "aucune", departage: true },
 ];
 
+/**
+ * SOURCES DE DECOUVERTE (§6.2 etendu le 21/09/2026).
+ *
+ * La decouverte ne travaillait que sur Booking : sur une escale comme Suvarnabhumi, cela
+ * plafonne le vivier a ~12 etablissements, tres loin des ~25 a 40 hotels qu'il faut pour
+ * loger 250 passagers et plus. Deux familles de sources, qui ne rendent PAS la meme chose :
+ *
+ *  - PLATEFORME (`booking`, `agoda`, `tripcom`, `expedia`) : une fiche reservable, donc un
+ *    PRIX PUBLIC. Ces etablissements passent au releve et entrent au plan chiffre (INV-3).
+ *    Agoda et Trip.com referencent en Asie du Sud-Est beaucoup d'hotels absents de Booking.
+ *
+ *  - ANNUAIRE (`maps`) : un nom, une adresse, un TELEPHONE, parfois un site. Aucun prix.
+ *    Une seule session ramene des dizaines d'etablissements — c'est la source la moins
+ *    chere au nombre d'hotels, et la seule qui atteigne les etablissements presents sur
+ *    aucune plateforme. Ces entrees sont des LEADS : elles ne sont jamais allouees au plan
+ *    (aucun prix public, INV-3), elles forment le VIVIER DE REPLI A APPELER remis au comptoir.
+ *
+ * Un lead dont le nom se recoupe avec un candidat de plateforme est PROMU sans depenser une
+ * session de plus : la resolution se fait par recoupement, jamais par une session dediee.
+ *
+ * INV-2 reste entier : une source qui presente un CAPTCHA est signalee et abandonnee, elle
+ * n'est jamais contournee.
+ */
+export const SOURCE_KEYS = ["booking", "agoda", "tripcom", "expedia", "maps"];
+
+export const SOURCE_LABELS = {
+  booking: "Booking.com (plateforme, prix public)",
+  agoda: "Agoda (plateforme, prix public — fort en Asie du Sud-Est)",
+  tripcom: "Trip.com (plateforme, prix public)",
+  expedia: "Expedia (plateforme, prix public)",
+  maps: "Google Maps (annuaire : nom, adresse, téléphone — AUCUN prix)",
+};
+
+/** Nature d'une source : ce qu'elle rend, donc ce qu'on a le droit d'en faire. */
+export const SOURCE_NATURE = {
+  booking: "plateforme", agoda: "plateforme", tripcom: "plateforme", expedia: "plateforme",
+  maps: "annuaire",
+};
+
+const sourceDecouverte = z.object({
+  cle: z.enum(SOURCE_KEYS),
+  actif: z.boolean().default(false),
+  /** Ordre d'interrogation : la source la plus rentable d'abord. */
+  rang: z.number().int().min(1).max(20),
+  /** Plafond d'etablissements rapportes par cette source en une session. */
+  max_candidats: z.number().int().min(1).max(60).default(10),
+});
+
+/** Sources livrees par defaut : Booking seul reste actif, le reste est opt-in explicite
+ * (chaque source active coute au moins une session d'agent payante). */
+export const SOURCES_DEFAUT = [
+  { cle: "booking", actif: true, rang: 1, max_candidats: 12 },
+  { cle: "agoda", actif: false, rang: 2, max_candidats: 15 },
+  { cle: "maps", actif: false, rang: 3, max_candidats: 40 },
+  { cle: "tripcom", actif: false, rang: 4, max_candidats: 12 },
+  { cle: "expedia", actif: false, rang: 5, max_candidats: 12 },
+];
+
 const cabinPolicy = z.object({
   min_stars: z.number().int().min(0).max(5),
   max_stars: z.number().int().min(0).max(5).nullable(),
@@ -192,7 +250,12 @@ export const PolicySchema = z.object({
         n_socle: z.number().int().min(3).max(10).default(8),
         max_candidates: z.number().int().min(3).max(12).default(10),
         max_hotels_stage_b: z.number().int().min(2).max(8).default(5),
-        max_hotels_total: z.number().int().min(2).max(15).default(10),
+        /** Plafond releve le 21/09 : 10 -> 40. Loger 250 passagers demande ~135 a 170
+         * chambres, soit ~25 a 40 etablissements au rythme observe (8 a 10 chambres
+         * mobilisables par hotel sur un preavis d'une nuit). */
+        max_hotels_total: z.number().int().min(2).max(60).default(40),
+        /** Sources interrogees a la decouverte, dans l'ordre de leur rang. */
+        sources: z.array(sourceDecouverte).default(SOURCES_DEFAUT),
         /** C1 - rayon de recherche en metres envoye a Booking (null = valeur de la fiche escale). */
         radius_m: z.number().int().min(500).max(50000).nullable().default(null),
         /** C1 - traduire les prestations exigees de la cabine en filtres de recherche. */
@@ -206,7 +269,8 @@ export const PolicySchema = z.object({
         apply_price_filter: z.boolean().default(false),
       })
       .default({
-        min_review_score: 7, n_socle: 8, max_candidates: 10, max_hotels_stage_b: 5, max_hotels_total: 10,
+        min_review_score: 7, n_socle: 8, max_candidates: 10, max_hotels_stage_b: 5, max_hotels_total: 40,
+        sources: SOURCES_DEFAUT,
         radius_m: null, apply_amenity_filters: true, apply_price_filter: false,
       }),
     /** C4/C6 - etalement des convocations au comptoir. Sans lui, les 157 dossiers sont
@@ -262,12 +326,18 @@ export const PolicySchema = z.object({
       probe_same_hotel_first: z.boolean().default(true), // H-3 : tranchée en phase 5
       batch_size: z.union([z.literal("auto"), z.number().int().min(1).max(8)]).default("auto"),
       max_waves: z.number().int().min(0).max(8).default(4),
-      max_sessions_per_run: z.number().int().min(0).max(50).default(18),
-      max_cost_usd_per_run: z.number().nonnegative().default(10),
+      /** Releve le 21/09 : 18 -> 50. A 40 relevés + les decouvertes multi-sources,
+       * 18 sessions arretaient le run sur la BORNE et non sur le besoin. */
+      max_sessions_per_run: z.number().int().min(0).max(120).default(50),
+      /** Releve le 21/09 : 10 -> 15 $. Mesure de l'Etage 0 du 21/09 : 0,13 $ par releve
+       * (8 relevés + 1 decouverte = 1,68 $). 40 relevés ~ 5,2 $ + decouvertes. */
+      max_cost_usd_per_run: z.number().nonnegative().default(15),
       probe_no_rooms_max: z.number().int().min(9).max(50).default(30),
       /** C5 - budget horloge du run entier, en minutes. Quatrieme borne, au meme rang
        * que les vagues, les sessions et le cout : l'extension s'arrete a l'echeance. */
-      max_minutes_per_run: z.number().int().min(5).max(240).default(45),
+      /** Releve le 21/09 : 45 -> 60 min. 40 relevés a concurrence 6, au rythme mesure
+       * de ~110 s par releve, tiennent en ~13 min ; la marge couvre les decouvertes. */
+      max_minutes_per_run: z.number().int().min(5).max(240).default(60),
       /** C2 - SEUIL DE VIGILANCE, PAS un plafond (voir allocate.mjs). Il ne retranche AUCUNE
        * chambre du plan : au-dela, le volume « a confirmer » engage chez un meme hotel est
        * signale au validateur et l'hotel designe prioritaire a sonder. La contrepartie qui
@@ -284,8 +354,8 @@ export const PolicySchema = z.object({
     })
     .default({
       enabled: true, probe_same_hotel_first: true, batch_size: "auto",
-      max_waves: 4, max_sessions_per_run: 18, max_cost_usd_per_run: 10, probe_no_rooms_max: 30,
-      max_minutes_per_run: 45, hotel_cap_without_probe: 20, room_qty_sane_max: 60, rediscover_on_exhaustion: true,
+      max_waves: 4, max_sessions_per_run: 50, max_cost_usd_per_run: 15, probe_no_rooms_max: 30,
+      max_minutes_per_run: 60, hotel_cap_without_probe: 20, room_qty_sane_max: 60, rediscover_on_exhaustion: true,
     }),
   /** Vitesse et puissance (CDC §16) — « auto » = maximum du plan H, plafonné à 6.
    * Modèles H-9 (mesuré phase 5) : les ids de MODÈLE sont `holo3-122b-a10b` (Holo3

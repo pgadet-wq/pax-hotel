@@ -227,6 +227,79 @@ const trajetDeclareTexte = (v) => (estNombre(v) ? `${fmtInt(v)} min déclarées`
 /** Rayon d'une couronne, en km, ou « indéterminé » — jamais 0 km. */
 const rayonTexte = (v) => (estNombre(v) ? `${Math.round(Number(v) / 100) / 10} km` : "rayon indéterminé");
 
+/** Sources de découverte servies par le serveur ; repli sur la politique par défaut. */
+function sourcesDefaut() {
+  return S.config?.defaults?.policy?.global?.discovery?.sources ?? [];
+}
+
+const SOURCE_TEXTE = {
+  booking: ["Booking.com", "plateforme — prix public, entre au plan"],
+  agoda: ["Agoda", "plateforme — fort en Asie du Sud-Est, référence des hôtels absents de Booking"],
+  tripcom: ["Trip.com", "plateforme — prix public"],
+  expedia: ["Expedia", "plateforme — prix public"],
+  maps: ["Google Maps", "ANNUAIRE — nom, adresse et téléphone, AUCUN prix : vivier à appeler"],
+};
+
+/** Une case à cocher par source, avec son plafond d'établissements. */
+function renderSources(policy) {
+  const wrap = $("src-liste");
+  if (!wrap) return;
+  clear(wrap);
+  const parCle = new Map((policy.global?.discovery?.sources ?? []).map((x) => [x.cle, x]));
+  const defauts = sourcesDefaut();
+  const liste = (defauts.length ? defauts : [...parCle.values()]).slice().sort((a, b) => a.rang - b.rang);
+  let actives = 0;
+  for (const d of liste) {
+    const cur = parCle.get(d.cle) ?? d;
+    if (cur.actif) actives++;
+    const [nom, quoi] = SOURCE_TEXTE[d.cle] ?? [d.cle, ""];
+    const ligne = el("div", { class: "pec-ligne" });
+    const lab = el("label", { class: "checkline" });
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.id = `src-actif-${d.cle}`;
+    cb.checked = cur.actif === true;
+    lab.append(cb, document.createTextNode(` ${nom}`));
+    const note = el("span", { class: "hint" });
+    note.textContent = ` — ${quoi}`;
+    lab.append(note);
+    const max = el("label");
+    max.textContent = "max établissements ";
+    const inp = el("input");
+    inp.type = "number";
+    inp.min = "1";
+    inp.max = "60";
+    inp.step = "1";
+    inp.id = `src-max-${d.cle}`;
+    inp.value = cur.max_candidats ?? d.max_candidats ?? 10;
+    max.append(inp);
+    ligne.append(lab, max);
+    wrap.append(ligne);
+  }
+  const bilan = $("src-bilan");
+  if (bilan) {
+    bilan.textContent = actives
+      ? `${actives} source(s) cochée(s) — au moins ${actives} session(s) d'agent payante(s) à la découverte.`
+      : "Aucune source cochée : le vivier se limitera à l'inventaire déjà fiché.";
+  }
+}
+
+/** Relit les cases de sources dans la politique soumise. */
+function lireSources(base) {
+  const defauts = sourcesDefaut();
+  if (!defauts.length || !$("src-actif-booking")) return; // écran non rendu : on ne touche à rien
+  const disc = (base.global.discovery ??= {});
+  disc.sources = defauts.map((d) => {
+    const max = Number($(`src-max-${d.cle}`)?.value);
+    return {
+      cle: d.cle,
+      actif: $(`src-actif-${d.cle}`)?.checked ?? d.actif,
+      rang: d.rang,
+      max_candidats: Number.isFinite(max) && max > 0 ? max : d.max_candidats,
+    };
+  });
+}
+
 /** Vocabulaire des critères servi par le serveur ; repli sur la politique par défaut. */
 function vocabulairePec() {
   const v = S.config?.prise_en_charge;
@@ -292,6 +365,8 @@ function buildPriseEnChargeForm(policy) {
     return ca.rang - cb.rang || String(a).localeCompare(String(b));
   });
   for (const cle of ordre) wrap.append(critereLigne(cle, parCle.get(cle) ?? critereDefaut(cle)));
+
+  renderSources(policy);
 
   $("f-pec-age").value = pec.age_bas_max ?? 6;
   $("f-pec-elargir").checked = pec.elargir_si_insuffisant !== false;
@@ -457,6 +532,7 @@ function policyFromForm() {
       departage: $(`pec-dep-${cle}`)?.checked ?? d.departage,
     };
   });
+  lireSources(base);
   pec.age_bas_max = Number($("f-pec-age").value);
   pec.elargir_si_insuffisant = $("f-pec-elargir").checked;
   base.global.correspondance = {

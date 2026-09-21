@@ -31,7 +31,8 @@ test("CLI rebooking-v2 : --dry-run BKK — besoins, inventaire, décision décou
   // les URLs de relevé portent les dates du séjour (buildHotelUrl), quel que soit le classement Étage B
   assert.match(r.stdout, /booking\.com\/hotel\/th\/[a-z0-9-]+\.html\?checkin=2026-\d{2}-\d{2}&checkout=/);
   assert.match(r.stdout, /Plan d'extension théorique/);
-  assert.match(r.stdout, /18 sessions · 4 vagues · 10 \$/);
+  // bornes relevees le 21/09 pour tenir 40 hotels multi-sources
+  assert.match(r.stdout, /50 sessions · 4 vagues · 15 \$/);
   assert.match(r.stdout, /aucun agent, aucun réseau/);
 });
 

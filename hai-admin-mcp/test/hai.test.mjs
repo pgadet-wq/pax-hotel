@@ -61,7 +61,7 @@ test("hai : probeSchema et inventaireHotelSchema valident leurs réponses plates
 });
 
 test("hai : toDiscoveryCandidates normalise les cartes (0 → null, badges → liste)", () => {
-  const flat = { currency: "EUR", candidates: [{ name: "A", url: "", stars: 0, review_score: 8.2, price_from_per_night: 0, distance_km: -1, badges: "Wifi, Navette", premium_pass: true }], notes: "" };
+  const flat = { currency: "EUR", candidates: [{ name: "A", url: "", stars: 0, review_score: 8.2, price_from_per_night: 0, distance_km: -1, badges: "Wifi, Navette", premium_pass: true, address: "", phone: "", website: "" }], notes: "" };
   assert.equal(discoverySchema.safeParse(flat).success, true);
   const [c] = toDiscoveryCandidates(flat);
   assert.equal(c.stars, null);
@@ -69,6 +69,25 @@ test("hai : toDiscoveryCandidates normalise les cartes (0 → null, badges → l
   assert.equal(c.distance_km, null);
   assert.deepEqual(c.amenities_seen, ["Wifi", "Navette"]);
   assert.equal(c.premium_pass, true);
+});
+
+test("hai : discoverySchema accepte une carte d'ANNUAIRE — adresse et téléphone, sans URL ni prix", () => {
+  // Contrat de la source `maps` (21/09) : elle ne rend NI fiche réservable NI prix public,
+  // mais elle rend le téléphone — la seule donnée qui permette d'appeler un établissement
+  // présent sur aucune plateforme.
+  const flat = {
+    currency: "",
+    candidates: [{
+      name: "Orchid Garden Place", url: "", stars: 3, review_score: 7.8,
+      price_from_per_night: 0, distance_km: -1, badges: "hôtel 3 étoiles", premium_pass: false,
+      address: "12 Kingkaew Rd, Bang Phli, Samut Prakan", phone: "+66 2 555 0000", website: "https://orchidgarden.example",
+    }],
+    notes: "",
+  };
+  assert.equal(discoverySchema.safeParse(flat).success, true);
+  const [c] = toDiscoveryCandidates(flat);
+  assert.equal(c.price_from_per_night, null, "aucun prix public depuis un annuaire");
+  assert.equal(c.distance_km, null);
 });
 
 test("hai : agent v2 nommé par escale, v1 intacte (INV-6)", () => {

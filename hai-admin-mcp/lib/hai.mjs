@@ -124,6 +124,9 @@ export const discoverySchema = z.object({
         distance_km: z.number().describe("distance affichée en km (aéroport ou centre selon la recherche), -1 si absente"),
         badges: z.string().describe("badges de la carte séparés par des virgules, ex: Navette aéroport, Wi-Fi gratuit"),
         premium_pass: z.boolean().describe("true si vu dans la passe premium"),
+        address: z.string().describe("adresse postale complète telle qu'affichée, vide si absente"),
+        phone: z.string().describe("téléphone tel qu'affiché, format international si donné, vide si absent"),
+        website: z.string().describe("site officiel de l'établissement s'il est affiché, vide sinon"),
       }),
     )
     .describe("établissements dédupliqués par nom, les meilleurs d'abord"),
@@ -477,6 +480,99 @@ export function promptDiscovery({ station, checkin, checkout, nflt, nSocle = 8, 
     `premium_pass=true. AU PREMIER incident sur cette passe (redirection, autre zone, erreur), abandonne-la ` +
     `DÉFINITIVEMENT et rédige immédiatement ta réponse avec les candidats de l'étape 4, passe signalée dans notes.\n\n` +
     `Maximum ${maxCandidates} candidats dédupliqués par nom. ${GARDE_FOUS}`
+  );
+}
+
+/**
+ * Decouverte sur une plateforme AUTRE que Booking (Agoda, Trip.com, Expedia).
+ *
+ * Difference essentielle avec `promptDiscovery` : les codes de filtre de ces plateformes
+ * n'ont pas ete releves sur pieces, donc AUCUN filtre n'est injecte dans l'URL. L'agent
+ * fait une recherche manuelle et rapporte ce que la page affiche ; c'est le moteur qui
+ * juge ensuite la conformite. Un filtre invente ne rendrait pas une erreur, il rendrait
+ * zero resultat et viderait le vivier en silence.
+ *
+ * @param {object} args {plateforme, entree, station, checkin, checkout, maxCandidates}
+ * @returns {string}
+ */
+export function promptDiscoveryPlateforme({ plateforme, entree, station, checkin, checkout, maxCandidates = 12 }) {
+  return (
+    `Tu prépares l'hébergement d'urgence de passagers dont le vol est immobilisé à ${station.name} (${station.code}). ` +
+    `Séjour du ${checkin} au ${checkout}, base 2 adultes, 1 chambre. Travaille sur ${plateforme} — ouvre ${entree}.
+
+` +
+    `MÉTHODE :
+` +
+    `1. Ferme les fenêtres surgissantes (cookies : refuse les non essentiels ; connexion : ignore).
+` +
+    `2. Tape « ${station.search.zone_query} » dans le champ de destination et SÉLECTIONNE la suggestion ` +
+    `correspondante avant de valider. Règle les dates ${checkin} → ${checkout} et 2 adultes, lance la recherche.
+` +
+    `3. Vérifie que les résultats portent bien sur cette zone. S'ils portent sur une autre ville, corrige la ` +
+    `destination UNE fois, puis abandonne si c'est encore faux (notes, outcome blocked).
+` +
+    `4. Trie par distance si l'option existe, sinon laisse le tri par défaut.
+` +
+    `5. Relève les ${maxCandidates} meilleurs établissements depuis les CARTES de résultats — n'ouvre AUCUNE ` +
+    `fiche : nom, étoiles, note, nombre d'avis, prix « à partir de » par nuit, distance affichée, équipements ` +
+    `visibles, URL de la fiche sans paramètres de session.
+` +
+    `   N'INVENTE AUCUNE VALEUR : un champ non affiché reste vide (ou 0 pour les nombres, -1 pour la distance). ` +
+    `Il vaut mieux un champ vide qu'une valeur plausible.
+` +
+    `6. Renseigne la devise réellement affichée par le site dans currency — elle peut ne pas être l'euro.
+
+` +
+    `Les champs address, phone et website concernent l'annuaire : laisse-les vides ici. ${GARDE_FOUS}`
+  );
+}
+
+/**
+ * Decouverte par ANNUAIRE (Google Maps) : la source la moins chere au nombre d'hotels.
+ *
+ * Elle ne rend NI prix NI disponibilite — ce n'est pas une plateforme de reservation. Ce
+ * qu'elle rend et que rien d'autre ne rend : l'adresse et le TELEPHONE, c'est-a-dire de
+ * quoi appeler un etablissement present sur aucune plateforme. Ces entrees deviennent des
+ * LEADS : jamais allouees au plan (INV-3, prix publics uniquement), elles forment le vivier
+ * de repli a appeler remis au comptoir.
+ *
+ * @param {object} args {entree, station, maxCandidates, rayonKm}
+ * @returns {string}
+ */
+export function promptDiscoveryAnnuaire({ entree, station, maxCandidates = 40, rayonKm = null }) {
+  const zone = rayonKm ? `dans un rayon d'environ ${rayonKm} km autour de ${station.search.zone_query}` : `autour de ${station.search.zone_query}`;
+  return (
+    `Tu constitues une LISTE D'ÉTABLISSEMENTS HÔTELIERS ${zone}, pour une escale aérienne qui doit loger ` +
+    `des passagers en urgence à ${station.name} (${station.code}). Ouvre ${entree}.
+
+` +
+    `CE QUE TU CHERCHES — et c'est différent d'une recherche de réservation : tu ne cherches ni prix, ni ` +
+    `disponibilité, ni dates. Tu dresses un ANNUAIRE. Le téléphone est la donnée la plus précieuse : c'est ce ` +
+    `qui permettra d'appeler un hôtel qui n'est sur aucune plateforme de réservation.
+
+` +
+    `MÉTHODE :
+` +
+    `1. Ferme les fenêtres surgissantes (cookies : refuse les non essentiels ; connexion : ignore).
+` +
+    `2. Parcours la liste de résultats. Fais défiler pour en charger davantage, plusieurs fois.
+` +
+    `3. Pour CHAQUE établissement, relève depuis la liste ou le panneau latéral : name (nom exact), ` +
+    `address (adresse postale complète), phone (téléphone tel qu'affiché), website (site officiel si affiché), ` +
+    `stars (étoiles si affichées, sinon 0), review_score (note ramenée sur 10 — une note sur 5 se multiplie ` +
+    `par 2), badges (type d'établissement, ex: hôtel 3 étoiles, resort, résidence).
+` +
+    `4. Laisse url et price_from_per_night VIDES (url "" et prix 0) : ce n'est pas une fiche réservable et il ` +
+    `n'y a pas de prix public ici. distance_km : -1 si elle n'est pas affichée.
+` +
+    `5. Va jusqu'à ${maxCandidates} établissements. La QUANTITÉ compte plus que la finesse : un nom et un ` +
+    `téléphone valent mieux qu'une fiche parfaite. Ne t'attarde pas sur un établissement.
+` +
+    `6. Écarte ce qui n'est pas un hébergement (restaurants, agences, parkings) et déduplique par nom.
+
+` +
+    `N'INVENTE AUCUNE VALEUR : un champ non affiché reste vide. Un téléphone approximatif est pire ` +
+    `qu'un téléphone absent — il enverra quelqu'un appeler dans le vide au milieu de la nuit. ${GARDE_FOUS}`
   );
 }
 

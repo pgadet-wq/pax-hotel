@@ -34,7 +34,7 @@ import { computeCost } from "../hai-admin-mcp/lib/cout.mjs";
 import { preflightUrls } from "../hai-admin-mcp/lib/preflight.mjs";
 import { discoveryNeeded } from "../hai-admin-mcp/lib/discovery.mjs";
 import { planExtension } from "../hai-admin-mcp/lib/capacite.mjs";
-import { buildHotelUrl, buildSearchPlan, HYPOTHESE_FILTRE_PRIX, NFLT_CODES_RELEVES_LE } from "../hai-admin-mcp/lib/hai-urls.mjs";
+import { buildHotelUrl, buildSearchPlan, HYPOTHESE_FILTRE_PRIX, NFLT_CODES_RELEVES_LE, sourcesActives } from "../hai-admin-mcp/lib/hai-urls.mjs";
 import { realCollect } from "../hai-admin-mcp/lib/pipeline.mjs";
 import { createHub } from "./sse-hub.mjs";
 import { createRunManager, HttpError } from "./run-manager.mjs";
@@ -396,6 +396,26 @@ export function createDemoServer(opts = {}) {
       // C1/§6 — l'URL de recherche RÉELLEMENT construite, ce qui est filtré et ce qui
       // ne peut PAS l'être : l'opérateur ne doit plus payer à l'aveugle.
       recherche: planDeRecherche({ policy, station, checkin, checkout, needs }),
+      // SOURCES — chaque source cochée est AU MOINS une session d'agent payante à la
+      // découverte. L'opérateur doit le voir avant de lancer, pas le découvrir sur la facture.
+      sources: (() => {
+        const { sources, avertissements } = sourcesActives(policy, station, {
+          rayonM: policy.global?.discovery?.radius_m ?? null,
+        });
+        return {
+          actives: sources.map((x) => ({
+            cle: x.cle, nature: x.nature, rang: x.rang, max_candidats: x.max_candidats,
+            entree: x.entree, filtres_releves: x.filtres_releves,
+          })),
+          sessions_decouverte_min: sources.length,
+          plateformes: sources.filter((x) => x.nature === "plateforme").length,
+          annuaires: sources.filter((x) => x.nature === "annuaire").length,
+          note: sources.some((x) => x.nature === "annuaire")
+            ? "un annuaire rend des LEADS : nom, adresse et téléphone, aucun prix public — ils ne sont pas alloués au plan (INV-3) mais forment le vivier à appeler"
+            : "",
+          avertissements,
+        };
+      })(),
       // C5 — la seule borne d'horloge que le run appliquera vraiment.
       bornes: {
         minutes_max: policy.extension?.max_minutes_per_run ?? null,

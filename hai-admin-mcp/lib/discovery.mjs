@@ -26,8 +26,10 @@
 import {
   agentNameV2, ensureAgentV2, buildNflt, buildSearchUrl, discoverySchema,
   toDiscoveryCandidates, promptDiscovery, pumpToCompletion, budgetRestantMs,
+  promptDiscoveryPlateforme,
+  promptDiscoveryAnnuaire,
 } from "./hai.mjs";
-import { couronnesRecherche } from "./hai-urls.mjs";
+import { couronnesRecherche, sourcesActives } from "./hai-urls.mjs";
 import { couronnesDe } from "./stations.mjs";
 import { chambresHorsPortee } from "./dossiers.mjs";
 import { isStale, candidatesFrom, slugify, capaciteIndicative } from "./inventaire.mjs";
@@ -352,14 +354,22 @@ const couronneEntree = (c) => {
  *
  * @param {object} candidate @param {{observedAt?: string|null, couronne?: object|number|null}} [opts]
  */
-export function candidateToEntry(candidate, { observedAt = null, couronne = null } = {}) {
+export function candidateToEntry(candidate, { observedAt = null, couronne = null, sourceCle = "", nature = "plateforme" } = {}) {
   const anneau = couronneEntree(couronnePlusProche(couronne, candidate?.couronne ?? null));
+  // ANNUAIRE (Maps) : ni fiche reservable ni prix public. L'entree est un LEAD — jamais
+  // allouee au plan (INV-3), elle alimente le vivier de repli a appeler. Ce qu'elle apporte
+  // et que rien d'autre n'apporte : l'adresse et le telephone.
+  const lead = nature === "annuaire";
+  const tel = String(candidate.phone ?? "").trim();
+  const adresse = String(candidate.address ?? "").trim();
   return {
     couronne: anneau,
     id: slugify(candidate.name),
     name: candidate.name,
-    url: candidate.url || "",
-    source: "agent",
+    url: lead ? "" : candidate.url || "",
+    source: lead ? "lead" : "agent",
+    source_cle: sourceCle || (lead ? "maps" : "booking"),
+    adresse,
     contracted: false, preferred: false, excluded: false,
     stars: candidate.stars ?? null,
     review_score: candidate.review_score ?? null,
@@ -368,12 +378,19 @@ export function candidateToEntry(candidate, { observedAt = null, couronne = null
     distance_ref: null,
     amenities: {}, // badges de carte non confirmés : rien n'est affirmé avant relevé
     payment: { prepayment_online: "non_precise", pay_at_property_only: null },
-    indicative_price_from_eur: candidate.price_from_per_night ?? null,
+    // un lead n'a AUCUN prix public : le laisser a null est la seule reponse honnete
+    indicative_price_from_eur: lead ? null : candidate.price_from_per_night ?? null,
     capacity_hint: null,
-    contact: { phone: null, email: null },
+    contact: { phone: tel || null, email: null },
     // les badges restent une OBSERVATION de carte : ils alimentent `notes`, jamais
     // `amenities` — un hôtel n'est déclaré accessible qu'au relevé (C1/C3)
     notes: [
+      lead
+        ? `LEAD d'annuaire (${sourceCle || "maps"}) — aucun prix public, aucune disponibilité : ` +
+          `à APPELER${tel ? ` au ${tel}` : " (téléphone non relevé)"}`
+        : sourceCle && sourceCle !== "booking"
+          ? `trouvé sur ${sourceCle}`
+          : "",
       candidate.amenities_seen?.length ? `badges vus : ${candidate.amenities_seen.join(", ")}` : "",
       candidate.premium_pass ? "passe premium" : "",
       candidate.pmr_pass ? "vu dans la passe PMR (filtre d'accessibilité Booking) — accessibilité à confirmer au relevé" : "",
@@ -498,10 +515,184 @@ const aBadgePmr = (c) => (c.amenities_seen ?? []).some((b) => String(b).trim().t
  *          elargissement?: object|null, couronne?: object|number|null}} args
  *          options additives (défauts = comportement actuel)
  */
+/**
+ * Cle de recoupement d'un etablissement entre deux sources.
+ *
+ * Deliberement TOLERANTE : « Hyatt Regency Bangkok Suvarnabhumi Airport » et « Hyatt
+ * Regency Suvarnabhumi » doivent se reconnaitre. On retire les mots de remplissage
+ * (hotel, resort, airport, le nom de la ville) et on garde les trois premiers mots
+ * significatifs. Deux etablissements distincts d'une meme chaine dans la meme zone
+ * peuvent se confondre : le risque est assume et nomme — mieux vaut fusionner deux fiches
+ * du meme groupe que relever deux fois le meme hotel a 0,13 $ la session.
+ *
+ * @param {string} nom
+ * @returns {string} cle de recoupement ("" si le nom est vide)
+ */
+export function cleRecoupement(nom) {
+  const VIDES = new Set([
+    "hotel", "hotels", "resort", "spa", "airport", "aeroport", "suvarnabhumi", "bangkok",
+    "the", "at", "by", "and", "de", "du", "la", "le", "les", "residence", "boutique", "inn",
+  ]);
+  return String(nom ?? "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9 ]+/g, " ")
+    .split(/\s+/).filter((m) => m && !VIDES.has(m))
+    .slice(0, 3).join("-");
+}
+
+/**
+ * Fusionne les candidats de plusieurs sources et PROMEUT les leads par recoupement.
+ *
+ * C'est le point qui evite de payer deux fois. Un etablissement trouve a la fois par
+ * l'annuaire (nom + telephone, pas de prix) et par une plateforme (fiche reservable, prix
+ * public) ne doit ni etre releve deux fois, ni rester un lead : la fiche de plateforme
+ * gagne — elle seule permet un plan chiffre — et elle HERITE du telephone et de l'adresse
+ * de l'annuaire. La resolution se fait donc par recoupement, sans une session de plus.
+ *
+ * @param {Array<{cle: string, nature: string, entrees: Array<object>}>} parSource
+ * @returns {{entrees: Array<object>, bilan: object}}
+ */
+export function fusionnerSources(parSource = []) {
+  const parCle = new Map();
+  const bilan = { parSource: {}, promus: 0, doublons: 0, leads: 0, plateforme: 0 };
+
+  // les PLATEFORMES d'abord : une fiche reservable prime toujours sur un lead
+  const ordonne = [...parSource].sort((a, b) => (a.nature === "annuaire" ? 1 : 0) - (b.nature === "annuaire" ? 1 : 0));
+
+  for (const src of ordonne) {
+    bilan.parSource[src.cle] = { rapportes: (src.entrees || []).length, retenus: 0, promus: 0, doublons: 0 };
+    for (const e of src.entrees || []) {
+      const k = cleRecoupement(e.name) || `#${e.id}`;
+      const vu = parCle.get(k);
+      if (!vu) {
+        parCle.set(k, e);
+        bilan.parSource[src.cle].retenus++;
+        continue;
+      }
+      bilan.doublons++;
+      bilan.parSource[src.cle].doublons++;
+      // le lead enrichit la fiche de plateforme : telephone et adresse, jamais le prix
+      if (e.source === "lead" && vu.source !== "lead") {
+        if (!vu.contact?.phone && e.contact?.phone) vu.contact = { ...vu.contact, phone: e.contact.phone };
+        if (!vu.adresse && e.adresse) vu.adresse = e.adresse;
+        vu.notes = [vu.notes, `recoupé avec l'annuaire ${e.source_cle}${e.contact?.phone ? " (téléphone récupéré)" : ""}`]
+          .filter(Boolean).join(" ; ");
+        bilan.promus++;
+        bilan.parSource[src.cle].promus++;
+      } else if (vu.source === "lead" && e.source !== "lead") {
+        // arrive si l'ordre est force : la fiche reservable remplace le lead
+        e.contact = { ...e.contact, phone: e.contact?.phone || vu.contact?.phone || null };
+        e.adresse = e.adresse || vu.adresse || "";
+        parCle.set(k, e);
+        bilan.promus++;
+      }
+    }
+  }
+
+  const entrees = [...parCle.values()];
+  for (const e of entrees) (e.source === "lead" ? bilan.leads++ : bilan.plateforme++);
+  return { entrees, bilan };
+}
+
+/**
+ * Choisit le prompt de decouverte selon la SOURCE.
+ *
+ * Trois formes, et elles ne rendent pas la meme chose :
+ *  - Booking (ou source absente) : passes filtrees par `nflt`, codes releves sur pieces ;
+ *  - autre plateforme : recherche MANUELLE, aucun filtre invente (un code errone rendrait
+ *    zero resultat et viderait le vivier en silence) ;
+ *  - annuaire : nom, adresse, telephone, aucun prix.
+ *
+ * @returns {string} le prompt a envoyer a l'agent
+ */
+function messagesDecouverte({ source, station, checkin, checkout, nflt, nfltPmr, suitePmr, policy }) {
+  const d = policy.global.discovery;
+  if (source && source.nature === "annuaire") {
+    return promptDiscoveryAnnuaire({
+      entree: source.entree, station,
+      maxCandidates: source.max_candidats ?? 40,
+      rayonKm: d.radius_m ? Math.round(d.radius_m / 1000) : null,
+    });
+  }
+  if (source && source.cle !== "booking") {
+    return promptDiscoveryPlateforme({
+      plateforme: source.cle, entree: source.entree, station, checkin, checkout,
+      maxCandidates: source.max_candidats ?? d.max_candidates,
+    });
+  }
+  return (
+    promptDiscovery({
+      station, checkin, checkout, nflt,
+      nSocle: d.n_socle, maxCandidates: d.max_candidates,
+    }) + (nfltPmr ? suitePmr(nfltPmr) : "")
+  );
+}
+
+/**
+ * Decouverte MULTI-SOURCES : une session par source active, puis fusion par recoupement.
+ *
+ * Les sources sont interrogees dans l'ordre de leur rang, SEQUENTIELLEMENT et non en
+ * parallele : chacune coute une session payante, et un echec de la premiere (CAPTCHA,
+ * zone introuvable) doit pouvoir arreter les suivantes avant de depenser pour rien.
+ * L'echeance d'horloge et le budget de sessions sont verifies avant CHAQUE source.
+ *
+ * Une source qui echoue n'interrompt pas les autres : elle est nommee dans `bilan`, et le
+ * run continue avec ce que les autres ont rapporte. Zero candidat de toutes les sources
+ * est un resultat, pas une exception.
+ *
+ * @returns {{entrees, bilan, sessions, steps, costUsd, sources, avertissements}}
+ */
+export async function runDiscoveryToutesSources(args) {
+  const { policy, station, emit = () => {}, observedAt = null, maxSessions = Infinity } = args;
+  const rayonM = policy?.global?.discovery?.radius_m ?? null;
+  const { sources, avertissements } = sourcesActives(policy, station, { rayonM });
+  for (const a of avertissements) emit("warning", { message: a });
+
+  const parSource = [];
+  const bilanSources = [];
+  let sessions = 0, steps = 0, costUsd = 0;
+
+  for (const src of sources) {
+    if (sessions >= maxSessions) {
+      const msg = `source « ${src.cle} » non interrogée : budget de sessions épuisé (${sessions}/${maxSessions})`;
+      emit("warning", { message: msg });
+      bilanSources.push({ cle: src.cle, statut: "non_lancee", motif: msg, candidats: 0 });
+      continue;
+    }
+    emit("phase", { phase: "discovery", source: src.cle, nature: src.nature });
+    const r = await runDiscovery({ ...args, source: src });
+    sessions += r.status === "skipped_budget" ? 0 : 1;
+    steps += r.steps ?? 0;
+    costUsd += r.costUsd ?? 0;
+
+    const entrees = (r.candidates ?? []).map((c) =>
+      candidateToEntry(c, { observedAt, couronne: r.couronne ?? null, sourceCle: src.cle, nature: src.nature }),
+    );
+    parSource.push({ cle: src.cle, nature: src.nature, entrees });
+    bilanSources.push({
+      cle: src.cle, nature: src.nature, statut: r.status,
+      candidats: entrees.length, notes: r.notes ?? "", outcome: r.outcome ?? null,
+      steps: r.steps ?? 0, costUsd: r.costUsd ?? 0,
+    });
+    if (!entrees.length) {
+      emit("warning", { message: `source « ${src.cle} » : aucun établissement rapporté${r.notes ? ` — ${r.notes}` : ""}` });
+    }
+  }
+
+  const { entrees, bilan } = fusionnerSources(parSource);
+  emit("phase", {
+    phase: "discovery", done: true, multi_sources: true,
+    sources: bilanSources.length, count: entrees.length,
+    leads: bilan.leads, plateforme: bilan.plateforme, promus: bilan.promus,
+  });
+  return { entrees, bilan: { ...bilan, sources: bilanSources }, sessions, steps, costUsd, sources: bilanSources, avertissements };
+}
+
 export async function runDiscovery({
   client, policy, station, checkin, checkout, groupId, emit, signal, attempt = 1,
   needs = null, pmr = null, deadlineAt = null, budgetRemainingMs = null,
   maxTimeS = DISCOVERY_MAX_TIME_S, elargissement = null, couronne = null,
+  source = null,
 }) {
   // le résiduel devient une échéance absolue UNE fois, ici : sinon le retry repartirait
   // avec le même « il reste 20 minutes » et la borne ne bornerait rien (C5)
@@ -512,7 +703,7 @@ export async function runDiscovery({
       : null;
   const suite = (n) => ({
     client, policy, station, checkin, checkout, groupId, emit, signal, attempt: n,
-    needs, pmr, deadlineAt: echeance, budgetRemainingMs: null, maxTimeS, elargissement, couronne,
+    needs, pmr, deadlineAt: echeance, budgetRemainingMs: null, maxTimeS, elargissement, couronne, source,
   });
 
   const restantMs = budgetRestantMs({ deadlineAt: echeance });
@@ -577,13 +768,12 @@ export async function runDiscovery({
   try {
     handle = await client.startSession({
       agent: agentNameV2(station),
-      messages:
-        promptDiscovery({
-          station: stationRech, checkin, checkout, nflt,
-          nSocle: policyRech.global.discovery.n_socle,
-          maxCandidates: policyRech.global.discovery.max_candidates,
-        }) + (nfltPmr ? suitePmr(nfltPmr) : ""),
-      maxSteps: nfltPmr ? 45 : 35,
+      messages: messagesDecouverte({
+        source, station: stationRech, checkin, checkout, nflt, nfltPmr, suitePmr,
+        policy: policyRech,
+      }),
+      // l'annuaire parcourt une longue liste : il lui faut plus de pas qu'une passe filtrée
+      maxSteps: source?.nature === "annuaire" ? 60 : nfltPmr ? 45 : 35,
       maxTimeS,
       // idleTimeoutS par défaut : null clôturait la session au moindre passage idle (constaté aux probes)
       groupId,

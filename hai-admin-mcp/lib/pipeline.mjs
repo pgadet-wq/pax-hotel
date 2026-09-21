@@ -28,7 +28,13 @@ export function realCollect(client) {
     // `options` (additif) porte ce qui varie d'une découverte à l'autre : besoins par
     // cabine (plafond de prix et passe PMR, C1/C3) et élargissement d'une redécouverte (C2)
     async discovery(ctx, options = {}) {
-      const { runDiscovery } = await import("./discovery.mjs");
+      const { runDiscovery, runDiscoveryToutesSources } = await import("./discovery.mjs");
+      // Une seule source active (Booking par defaut) : chemin d'origine, inchange.
+      // Des qu'une deuxieme est cochee, on passe par l'orchestrateur multi-sources — il
+      // rend des ENTREES deja typees (plateforme ou lead) et fusionnees par recoupement,
+      // la ou runDiscovery rend des candidats bruts d'une seule source.
+      const actives = (ctx.policy?.global?.discovery?.sources ?? []).filter((x) => x.actif);
+      if (actives.length > 1) return runDiscoveryToutesSources({ client, ...ctx, ...options });
       return runDiscovery({ client, ...ctx, ...options });
     },
     async releves(ctx, selection, substitutes, onInventory) {
@@ -368,8 +374,12 @@ export async function runPipeline({
   /** Fusion EN MÉMOIRE des candidats d'une découverte (EX-DIS-2) : les ids sont d'abord
    * alignés sur l'inventaire existant, sinon un hôtel déjà connu sous un autre slug est
    * dupliqué et relevé deux fois. @returns {number} entrées fusionnées */
-  const fusionnerCandidats = (candidats, couronne = null) => {
-    const brutes = (candidats ?? []).map((c) => candidateToEntry(c, { couronne }));
+  /** Entrées DÉJÀ construites (découverte multi-sources) : même fusion, sans repasser par
+   * `candidateToEntry` — qui écraserait la source, le téléphone et l'adresse d'un lead. */
+  const fusionnerEntrees = (entrees) => fusionnerCandidats(null, null, entrees);
+
+  const fusionnerCandidats = (candidats, couronne = null, entreesPretes = null) => {
+    const brutes = entreesPretes ?? (candidats ?? []).map((c) => candidateToEntry(c, { couronne }));
     if (!brutes.length) return 0;
     const entries = reconcileIds(inv, brutes, {
       onDrop: (e) => emit("log", { message: `découverte : « ${e.name} » déjà présent dans le lot sous un autre nom — doublon écarté` }),
@@ -402,7 +412,19 @@ export async function runPipeline({
      * session pour la même réponse. Seule une couronne qui a RÉELLEMENT filtré est marquée
      * (`discoveryResult.couronne`) : une couronne demandée mais non appliquée ne l'est pas. */
     if (discoveryResult?.couronne) couronnesOuvertes.add(discoveryResult.couronne.rang);
-    fusionnerCandidats(discoveryResult?.candidates, discoveryResult?.couronne ?? null);
+    if (discoveryResult?.entrees) {
+      // multi-sources : les entrées portent déjà leur source, leur téléphone et leur adresse
+      const b = discoveryResult.bilan ?? {};
+      fusionnerEntrees(discoveryResult.entrees);
+      emit("log", {
+        message:
+          `découverte multi-sources : ${discoveryResult.entrees.length} établissement(s) retenus — ` +
+          `${b.plateforme ?? 0} réservable(s) en ligne, ${b.leads ?? 0} lead(s) d'annuaire à appeler` +
+          (b.promus ? `, ${b.promus} recoupé(s) entre sources` : ""),
+      });
+    } else {
+      fusionnerCandidats(discoveryResult?.candidates, discoveryResult?.couronne ?? null);
+    }
   } else {
     if (decision.run) emit("warning", { message: `découverte requise (${decision.reason}) mais indisponible dans ce mode — repli inventaire + hôtels de secours` });
     emit("phase", { phase: "discovery_skipped", reason: decision.reason });

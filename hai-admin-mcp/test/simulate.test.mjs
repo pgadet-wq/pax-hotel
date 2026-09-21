@@ -64,8 +64,8 @@ test("run simulé complet : phases §5.8 ordonnées, vague 1 = 1 sonde + 1 relev
   // (policy.extension.max_minutes_per_run = 45 par défaut). `minutes_used` est mesuré sur
   // l'horloge murale : on vérifie qu'il est cohérent, pas qu'il vaut une valeur fixe.
   const { minutes_used, minutes_max, ...bornesFixes } = ext[0].limits;
-  assert.deepEqual(bornesFixes, { sessions_used: 0, sessions_max: 18, cost_usd: 0, cost_max: 10, wave: 1, max_waves: 4 });
-  assert.equal(minutes_max, 45);
+  assert.deepEqual(bornesFixes, { sessions_used: 0, sessions_max: 50, cost_usd: 0, cost_max: 15, wave: 1, max_waves: 4 });
+  assert.equal(minutes_max, 60);
   assert.ok(Number.isFinite(minutes_used) && minutes_used >= 0 && minutes_used < minutes_max, `minutes_used = ${minutes_used}`);
   // depuis la correction de la sonde, la chorégraphie n'est plus couverte à 100 % :
   // l'extension épuise ses candidats (les fixtures ne portent que 6 hôtels)

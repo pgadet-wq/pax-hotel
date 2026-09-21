@@ -195,7 +195,9 @@ export function indexContactsHotels(inventories = [], entrees = []) {
     const tel = a.contact?.phone ?? a.phone ?? inv?.contact?.phone ?? inv?.candidate?.contact?.phone ?? "";
     for (const nom of [a.hotel, inv?.name, inv?.hotelKey, inv?.hotel]) poser(nom, adresse, tel);
   }
-  for (const h of entrees ?? []) poser(h?.name, h?.address ?? "", h?.contact?.phone ?? "");
+  // le schema d'inventaire porte `adresse` (francais) ; `address` reste accepte pour les
+  // fiches ecrites avant le 21/09 — un contact perdu, c'est un hotel qu'on n'appelle pas
+  for (const h of entrees ?? []) poser(h?.name, h?.adresse || h?.address || "", h?.contact?.phone ?? "");
   return {
     /** @returns {{adresse: string, telephone: string}} valeurs prêtes à imprimer */
     de(nom) {
@@ -1067,6 +1069,38 @@ export function buildRapportMd(alloc, inventories, ctx) {
 
   /* C4 — l'écart avec une équipe d'escale, chiffré. C'est la section qui permet au client
      de dimensionner l'équipe résiduelle au lieu de croire qu'il n'en a plus besoin. */
+  // VIVIER DE REPLI (21/09) : les etablissements connus par annuaire seulement. Ils ne sont
+  // PAS dans le plan — aucun prix public (INV-3) — mais ce sont des chambres joignables au
+  // telephone, et c'est ce qui permet de depasser ce que les plateformes referencent.
+  const leads = (ctx.entrees ?? []).filter((h) => h?.source === "lead" && !h?.excluded);
+  if (leads.length) {
+    lines.push(`## Vivier de repli à APPELER — hors plateforme de réservation`);
+    lines.push("");
+    lines.push(
+      `**${leads.length} établissement(s)** trouvés par annuaire : ils ne figurent sur aucune plateforme de ` +
+      `réservation exploitée par l'outil, donc **aucun prix public et aucune disponibilité** n'a pu être relevé ` +
+      `(INV-3). Ils ne sont PAS dans le plan et ne sont pas chiffrés. Ce sont des chambres à obtenir **par ` +
+      `téléphone** — c'est le levier quand le vivier en ligne ne suffit pas.`,
+    );
+    lines.push("");
+    lines.push(`| Établissement | Téléphone | Adresse | Note | Source |`);
+    lines.push(`|---|---|---|---|---|`);
+    for (const h of leads) {
+      lines.push(
+        `| ${h.name} | **${h.contact?.phone || NON_RELEVE}** | ${h.adresse || h.address || NON_RELEVE} | ` +
+        `${h.review_score ?? NON_RELEVE} | ${h.source_cle || "annuaire"} |`,
+      );
+    }
+    const sansTel = leads.filter((h) => !h.contact?.phone).length;
+    lines.push("");
+    if (sansTel) {
+      lines.push(
+        `${sansTel} établissement(s) sans téléphone relevé : le nom et l'adresse sont là, le numéro reste à ` +
+        `trouver. Aucun numéro n'a été deviné.`,
+      );
+      lines.push("");
+    }
+  }
   lines.push(`## Travail humain restant (C4) — ce que l'outil NE fait pas`);
   lines.push("");
   const dossiersDesk = dossiersSansChambre;

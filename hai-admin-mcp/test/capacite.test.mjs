@@ -67,8 +67,9 @@ test("capacite : bornes — vagues, sessions, coût, extension désactivée, ép
     surveyedKeys: new Set(), probedKeys: new Set(), station: STATION_BKK, sessionsUsed: 0, costUsd: 0,
   };
   assert.match(planExtension({ ...base, policy: politique(), wave: 5 }).reason, /max_waves/);
-  assert.match(planExtension({ ...base, policy: politique(), wave: 1, sessionsUsed: 18 }).reason, /max_sessions_per_run/);
-  assert.match(planExtension({ ...base, policy: politique(), wave: 1, costUsd: 10 }).reason, /max_cost_usd_per_run/);
+  // bornes par defaut relevees le 21/09 (multi-sources, 40 hotels) : 18 -> 50 sessions, 10 -> 15 $
+  assert.match(planExtension({ ...base, policy: politique(), wave: 1, sessionsUsed: 50 }).reason, /max_sessions_per_run/);
+  assert.match(planExtension({ ...base, policy: politique(), wave: 1, costUsd: 15 }).reason, /max_cost_usd_per_run/);
   assert.match(planExtension({ ...base, policy: politique({ extension: { enabled: false } }), wave: 1 }).reason, /désactivée/);
   // plus rien à tenter → stop épuisé
   const vide = planExtension({ ...base, policy: politique(), wave: 1, candidates: [], surveyedKeys: new Set(["b"]) });

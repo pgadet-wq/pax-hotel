@@ -184,7 +184,7 @@ test("dry-run : 200 synchrone, besoins + URLs + extension théorique, aucun run"
   assert.ok(res.data.needs.Y.chambres > 0);
   assert.ok(res.data.releves.length >= 1);
   assert.ok(res.data.releves.every((r) => r.url === null || /checkin=/.test(r.url)));
-  assert.equal(res.data.extension.limits.sessions_max, 18);
+  assert.equal(res.data.extension.limits.sessions_max, 50); // relevé le 21/09 (multi-sources, 40 hôtels)
   assert.equal(app.manager.isRunning(), false);
 });
 
