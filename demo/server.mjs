@@ -492,14 +492,21 @@ export function createDemoServer(opts = {}) {
       if (!vivier.records.length) {
         throw new HttpError(502, "l'API hôtelière n'a rendu aucun établissement exploitable — vérifier la clé, l'escale et les dates");
       }
-      // l'inventaire de l'escale reçoit les entrées : le moteur choisit ses CANDIDATS ici
+      /* Le moteur choisit ses CANDIDATS dans l'inventaire de l'escale : les entrées de
+       * l'API doivent donc s'y trouver. Elles y entrent EN MÉMOIRE, jamais sur disque —
+       * `data/inventaire/<escale>.json` est versionné, et une écriture le salissait à
+       * chaque run : arbre git modifié après une démonstration, et surtout suite de tests
+       * en échec (un test vérifie que l'inventaire LIVRÉ ne contient que des entrées
+       * `agent`). Le mode simulation passe son inventaire de la même façon.
+       * La persistance délibérée reste possible par `tools/liteapi-releves.mjs
+       * --ecrire-inventaire`, où l'opérateur la demande explicitement. */
       const existant = loadInventaire(station.code, { dir: dirs.inventaireDir });
       const fusion = mergeInventaire(existant, { ...vivier.inventaire, hotels: reconcileIds(existant, vivier.entrees) });
-      fs.writeFileSync(path.join(dirs.inventaireDir, `${station.code}.json`), JSON.stringify(fusion, null, 2));
 
       const { runId } = manager.start({
         policy, avion, scenario, station, rows, ingestion: rows ? uploadedRapport : null,
         empreintePax: rows ? empreintePax(rows) : null,
+        inventaire: fusion,
         simulate: false,
         collectFactory: () => fixturesCollect(vivier.records),
       });
