@@ -445,6 +445,80 @@ export function toReleveRecords({ offres, fiches, ctx }) {
     .filter((r) => r.answer.rooms.length > 0);
 }
 
+/* ------------------------------------------------- construction du vivier */
+
+/**
+ * Coordonnées d'escale. Les fiches `data/stations/*.json` ne les portent pas encore :
+ * elles décrivent la zone par une requête texte, ce qui suffisait à une recherche par
+ * agent. Une API de géolocalisation en a besoin. À rapatrier dans les fiches.
+ */
+export const COORD_ESCALES = {
+  BKK: { lat: 13.69, lon: 100.7501, nom: "Bangkok Suvarnabhumi" },
+  NOU: { lat: -22.0146, lon: 166.213, nom: "Noumea La Tontouta" },
+  CDG: { lat: 49.0097, lon: 2.5479, nom: "Paris Charles de Gaulle" },
+};
+
+/** Paliers du balayage : peu de chambres chez beaucoup d'hôtels, puis l'inverse. */
+export const PALIERS_DEFAUT = [1, 2, 3, 5, 8];
+
+/**
+ * Construit un vivier complet depuis LiteAPI : fiches, équipements, puis offres à
+ * plusieurs paliers de chambres. Rend les enregistrements de fixture — directement
+ * consommables par `fixturesCollect()` — ET les entrées d'inventaire correspondantes.
+ *
+ * UN SEUL chemin de code pour la ligne de commande et pour le serveur : deux
+ * implémentations dériveraient, et la démonstration ne montrerait pas ce que l'outil fait.
+ */
+export async function construireVivier({
+  station, coord, checkin, checkout, nuits = 1, rayonM = 40000,
+  paliers = PALIERS_DEFAUT, devise = "EUR", limit = LIMIT_MAX,
+  cle, slugify, onProgress = null, fetchImpl = fetch,
+}) {
+  const dire = (etape, data = {}) => { try { onProgress?.(etape, data); } catch { /* le progrès ne fait jamais échouer un run */ } };
+
+  const fiches = await chercherHotels({ lat: coord.lat, lon: coord.lon, rayonM, limit, cle, fetchImpl });
+  dire("fiches", { hotels: fiches.length });
+
+  const facilites = await chercherFacilites({ cle, fetchImpl });
+  dire("equipements", { charge: Boolean(facilites) });
+
+  const meilleurReleve = new Map();
+  const meilleureEntree = new Map();
+  const avertissements = [];
+  let sandbox = false;
+
+  for (const n of paliers) {
+    const r = await chercherOffres({
+      lat: coord.lat, lon: coord.lon, rayonM, checkin, checkout,
+      chambres: n, devise, limit, cle, fetchImpl,
+    });
+    if (r.sandbox) sandbox = true;
+    for (const a of r.avertissements) avertissements.push(`${n} chambre(s) : ${a}`);
+
+    const ctx = { checkin, checkout, nuits, devise, chambresDemandees: n, station: coord, sandbox: Boolean(r.sandbox), facilites };
+    const cumul = (rec) => rec.answer.rooms.reduce((t, c) => t + c.quantity_available, 0);
+    for (const rec of toReleveRecords({ offres: r.hotels, fiches, ctx })) {
+      const vu = meilleurReleve.get(rec.hotel);
+      if (!vu || cumul(rec) > cumul(vu)) meilleurReleve.set(rec.hotel, rec);
+    }
+    for (const e of toInventaireEntries({ offres: r.hotels, fiches, ctx, slugify })) {
+      const vu = meilleureEntree.get(e.id);
+      if (!vu || (e.capacity_hint.rooms_displayed_max ?? 0) > (vu.capacity_hint.rooms_displayed_max ?? 0)) meilleureEntree.set(e.id, e);
+    }
+    dire("palier", { chambres: n, hotels: r.hotels.length });
+  }
+
+  const records = [...meilleurReleve.values()];
+  const entrees = [...meilleureEntree.values()];
+  const chambres = records.reduce((s, r) => s + r.answer.rooms.reduce((t, c) => t + c.quantity_available, 0), 0);
+  dire("termine", { hotels: records.length, chambres, sandbox });
+
+  return {
+    records, entrees, avertissements, sandbox, chambres,
+    inventaire: { station, updated_at: new Date().toISOString(), reference: { checkin, nights: nuits }, hotels: entrees },
+  };
+}
+
 /* --------------------------------------------------- entrées d'inventaire */
 
 /**

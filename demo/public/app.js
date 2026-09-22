@@ -570,6 +570,9 @@ function runPayload({ dryRun = false } = {}) {
       force_discovery: $("f-force-discovery").checked,
     },
     sim_speed: Number($("f-sim-speed").value),
+    // vivier par API hôtelière : ni agent, ni simulation. Le serveur construit le vivier,
+    // l'écrit dans l'inventaire de l'escale, puis rejoue — aucune session payante.
+    source: $("f-source-api")?.checked ? "api" : undefined,
     passengers: S.passengersMode,
     dry_run: dryRun || undefined,
   };
