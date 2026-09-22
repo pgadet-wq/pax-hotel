@@ -177,6 +177,26 @@ Trois règles nées de la mesure sont câblées et testées : `limit` ≤ 40 · 
 
 **À instruire ensuite** : porter latitude/longitude dans `data/stations/*.json` (elles vivent pour l'instant dans l'outil) ; décider si `prebook` — qui bloque l'inventaire 5 à 15 min à tarif garanti **sans réserver** — tombe ou non sous INV-1.
 
+### Câblage dans l'interface (23/09/2026)
+
+L'adaptateur n'était utilisable qu'en ligne de commande. Une case **« Vivier par API hôtelière (prix publics réels, aucun agent) »** ajoute `source: "api"` à `POST /api/run` ; le serveur construit le vivier, le passe **en mémoire** à `manager.start`, et rejoue par `fixturesCollect` — le même chemin, déjà testé, que le mode hors ligne. Aucune session payante : INV-8 n'est pas concerné, INV-1 non plus.
+
+`construireVivier()` centralise ce que faisait le CLI (fiches, dictionnaire d'équipements, offres par palier) : **un seul chemin de code** pour l'outil et pour le serveur.
+
+**Trois défauts trouvés en séance et corrigés** — chacun aurait pu se déclencher devant un client :
+
+1. **Le choix du vivier menait à un refus au lancement.** Décocher « mode démonstration » sans cocher « vivier par API » envoyait le run sur les agents payants (501, INV-8). Les trois viviers s'excluent désormais à l'écran : cocher l'API décoche et grise la simulation, et l'état « ni l'un ni l'autre » affiche un avertissement nommant le refus qui suivrait.
+2. **Un run salissait l'inventaire versionné.** Le vivier était écrit dans `data/inventaire/<escale>.json` : arbre git modifié après chaque run, et **suite de tests en échec** (`inventaire.test.mjs` vérifie que l'inventaire LIVRÉ ne contient que des entrées `agent` ; mesuré : 42 hôtels dont 36 `api`, 331/332). L'inventaire fusionné passe maintenant en mémoire, comme en simulation. La persistance délibérée reste sur `tools/liteapi-releves.mjs --ecrire-inventaire`.
+3. **INV-10 ne couvrait pas la construction du vivier.** `manager.start` refuse un second run, mais la branche API construit le vivier AVANT de l'appeler — une quinzaine de secondes pendant lesquelles `isRunning()` reste faux. Mesuré : **sept runs en quatre-vingts secondes** là où l'opérateur croyait en avoir lancé deux. La garde est désormais posée avant le premier appel réseau, avec un verrou libéré en `finally`.
+
+**Ce que la variabilité du bac à sable impose de savoir** : trois runs consécutifs ont rendu 36 hôtels / 1 760 chambres, puis 13 / 66, puis 8 hôtels. Les résultats ont varié de **171 logés / 288 personnes** à **141 logés / 300 personnes** sur la même liste. Des runs rapprochés rendent parfois des relevés **identiques hors horodatage** : c'est le cache du fournisseur, pas une recopie de l'outil — l'allocation, elle, est déterministe et doit l'être. Toute répétition avant une démonstration doit donc se faire **juste avant**, pas la veille.
+
+### Exposition réseau (vérifiée le 23/09/2026)
+
+`127.0.0.1:4310` est le **seul** point d'entrée de l'outil sur ce poste. Le serveur est lié à `127.0.0.1` par défaut (`demo/server.mjs`, `const host = opts.host ?? "127.0.0.1"`), donc injoignable depuis le réseau. Aucune instance déployée n'est référencée : `deploy/` ne contient que des gabarits (`https://IP.PU.BLI.QUE`), et le guide Scaleway impose de **ne jamais ouvrir 4310**, Caddy seul étant exposé en 443.
+
+Les ports `0.0.0.0:3000`, `:8000` et `:8080` observés en écoute appartiennent à **Docker Desktop**, pas à ce projet.
+
 ## Prochaine phase
 
 - **Les phases 0 à 7 du CDC sont terminées** (phase 7 close le 16/09). Il n'y a plus de fiche de phase à ouvrir.
