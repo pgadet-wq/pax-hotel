@@ -142,8 +142,43 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 - Recette UI simulation (15/09, navigateur) : `docs/recette-demo-v2.md` §2 — **chiffres périmés**, encadré ajouté en tête
 - Run complet réel : **JOUÉ le 16/09** (`mu3lnxm4`, recette §4)
 
+## Approvisionnement par API — branche `feat/approvisionnement-api` (22/09/2026)
+
+Le point bloquant « vivier BKK insuffisant » avait une cause que la lecture d'écran ne pouvait pas lever : **le sélecteur de quantité des plateformes grand public plafonne à 9**. Les 111 chambres indicatives, c'était 12 hôtels multipliés par ce plafond. Le client ayant écarté les passerelles B2B contractuelles pour raison de coût, la voie retenue est l'**API hôtelière en libre-service** : inscription immédiate, sans contrat ni volume minimum.
+
+**Mesuré le 22/09** (`tools/sonde-api.mjs --preflight`, gratuit, 0 session) :
+
+- **Amadeus Self-Service est MORT** — décommissionné le 17/07/2026, `test.api.amadeus.com` ne résout plus. Toute analyse qui le recommande est périmée.
+- Vivants, 401 propre : **LiteAPI** (`X-API-Key`), Duffel Stays, RateHawk, Hotelbeds (test).
+- Duffel est un mauvais candidat ici : pénalité au-delà d'un ratio recherches/réservations de 1500:1, or sous INV-1 l'outil ne réserve jamais.
+
+**Mesures LiteAPI sur BKK, nuit du 22 au 23/09, rayon 40 km, clé BAC À SABLE :**
+
+- **185 hôtels, 11 059 offres en un appel de 7 s** — contre 12 hôtels et 111 chambres dans l'inventaire.
+- Le multi-chambres sert **tous** les créneaux demandés (vérifié 2/2, 5/5, 8/8, 10/10 par `rates[].occupancyNumber`). Plafond par hôtel ≈ 10 ; 12 est refusé.
+- **Aucun champ de quantité n'existe** dans la réponse : la capacité se MESURE en demandant N chambres, elle ne se lit pas.
+- **Défaut à connaître** : `limit` > 40 casse la requête multi-chambres, et **l'API rend alors « no availability found » au lieu d'une erreur** (5 chambres : limit=20 → 17 hôtels · 40 → 38 · 100 → 0 · 200 → 0). Un adaptateur qui croit ce zéro annonce « aucune chambre à Bangkok » alors qu'il y en a des centaines.
+
+**Livré :** `lib/liteapi.mjs` (adaptateur), `tools/liteapi-releves.mjs` (outil), `tools/sonde-api.mjs` (banc de sonde), `test/liteapi.test.mjs` (16 cas). Une seule modification du code existant : `source: z.enum([… , "api"])` dans `lib/inventaire.mjs` — le quatrième type de source, pour qu'une entrée venue d'une API ne se déclare pas « agent ».
+
+Trois règles nées de la mesure sont câblées et testées : `limit` ≤ 40 · tout appel est rejoué · **un zéro est recoupé à `limit` plus bas avant d'être cru**, et le mensonge est nommé dans les avertissements. La règle du zéro a servi dès le premier run réel.
+
+**La distance est réglée à la racine** : les coordonnées de la fiche donnent une distance calculée qui PORTE sa référence (`distance_ref: "airport"`). 40 hôtels sur 40 en sont pourvus, là où le convertisseur d'inventaire forçait `distance_ref: null` et expédiait tout hôtel en couronne la plus lointaine.
+
+**Mesure de bout en bout** — liste réelle SB800 (324 passagers, 195 dossiers, 209 chambres), rejeu hors ligne, 0 session, 0 $ :
+
+- **171 dossiers logés / 24 en escalade · 288 personnes sur 324** (contre 122/35 en simulation sur les 12 hôtels)
+- escalades : 17 capacité cabine W · 5 droit d'entrée · 2 mineurs non accompagnés — **seules 17 sont un manque de chambres**
+- couronnes : **66 dossiers en couronne 1**, contre 2 hôtels et 10 chambres auparavant
+- conformité : 104 CONFORME · 27 PARTIELLE (service d'étage non précisé) · ~40 HORS BARÈME
+- `npm test` : **332 cas, 0 échec** · `data/inventaire/BKK.json` restauré à ses 12 hôtels
+
+**Réserves.** La réponse porte `"sandbox": true` : les VOLUMES sont des données de test, pas l'inventaire réel de Bangkok. Le protocole est prouvé, le stock ne l'est pas — à remesurer avec une clé de production. Les 40 dossiers HORS BARÈME relèvent de la tarification du bac à sable.
+
+**À instruire ensuite** : porter latitude/longitude dans `data/stations/*.json` (elles vivent pour l'instant dans l'outil) ; décider si `prebook` — qui bloque l'inventaire 5 à 15 min à tarif garanti **sans réserver** — tombe ou non sous INV-1.
+
 ## Prochaine phase
 
 - **Les phases 0 à 7 du CDC sont terminées** (phase 7 close le 16/09). Il n'y a plus de fiche de phase à ouvrir.
-- Travaux suivants, par ordre de valeur : (1) **élargir le vivier BKK** — seul point bloquant ; (2) rendre le tri de `rankedFor()` indépendant du plafond, pour que le levier de séance soit sûr ; (3) arbitrer « 1 chambre par PMR » et le sort du rapport nominatif ; (4) écran de correspondance RBD vers cabine.
+- Travaux suivants, par ordre de valeur : (1) **élargir le vivier BKK** — *traité par la branche `feat/approvisionnement-api`, voir la section ci-dessus ; reste à confirmer sur une clé de production* ; (2) rendre le tri de `rankedFor()` indépendant du plafond, pour que le levier de séance soit sûr ; (3) arbitrer « 1 chambre par PMR » et le sort du rapport nominatif ; (4) écran de correspondance RBD vers cabine.
 - Avant toute clôture : `git fetch`, relire ce fichier, compléter sans écraser (plusieurs conversations commitent dans ce dépôt).
