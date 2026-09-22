@@ -2176,6 +2176,33 @@ async function init() {
   $("f-station").addEventListener("change", renderStationInfo);
   renderStationInfo();
 
+  /* Les trois viviers s'excluent, et l'interface doit le montrer AVANT le clic.
+   * Sans ce garde-fou, décocher « mode démonstration » sans cocher « vivier par API »
+   * envoie le run sur le chemin des agents payants, que le serveur refuse par un 501
+   * (INV-8). L'opérateur découvrait le piège au moment du lancement — en séance. */
+  function synchroniserVivier() {
+    const api = $("f-source-api");
+    const sim = $("f-simulate");
+    if (!api || !sim) return;
+    sim.disabled = api.checked;
+    if (api.checked) sim.checked = false;
+    const vitesse = $("f-sim-speed");
+    if (vitesse) vitesse.disabled = api.checked || !sim.checked;
+    // l'état « ni simulation, ni API » ne mène qu'à un refus : on le dit ici, pas au serveur
+    const orphelin = !api.checked && !sim.checked;
+    sim.closest(".checkline")?.classList.toggle("alerte-vivier", orphelin);
+    const avert = $("vivier-avert");
+    if (avert) {
+      avert.textContent = orphelin
+        ? "Aucun vivier choisi : le run partirait sur des sessions d'agents PAYANTES, que le serveur refuse (INV-8). Cochez « mode démonstration » ou « vivier par API hôtelière »."
+        : "";
+      avert.hidden = !orphelin;
+    }
+  }
+  $("f-source-api")?.addEventListener("change", synchroniserVivier);
+  $("f-simulate")?.addEventListener("change", synchroniserVivier);
+  synchroniserVivier();
+
   buildPolicyForm(S.config.defaults.policy);
   $("f-avion-nom").value = S.config.defaults.avion.nom;
   for (const t of ["J", "W", "Y"]) $(`f-seats-${t}`).value = S.config.defaults.avion.seats[t];
