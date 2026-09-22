@@ -121,6 +121,12 @@ export function createDemoServer(opts = {}) {
   let uploadedInfo = null; // résumé d'ingestion exposé à l'UI (jamais nominatif)
   let uploadedRapport = null; // rapport d'ingestion complet, repris tel quel dans le rapport de run
   let haiClient = null; // client H partagé, créé au premier run réel (journal du point d'entrée EU)
+  /* INV-10 pendant la CONSTRUCTION du vivier par API. `manager.isRunning()` ne couvre pas
+   * cette phase : elle dure une quinzaine de secondes d'appels et précède `manager.start`.
+   * Sans ce verrou, un second clic sur « lancer » déclenchait un second balayage complet —
+   * constaté en séance : sept runs en quatre-vingts secondes, et autant d'appels inutiles
+   * à un fournisseur dont la gratuité dépend d'un ratio d'usage raisonnable. */
+  let vivierApiEnCours = false;
 
   async function getHaiClient() {
     if (!haiClient) {
@@ -471,6 +477,9 @@ export function createDemoServer(opts = {}) {
      * dans l'inventaire de l'escale, puis rejoué par `fixturesCollect` — le même chemin,
      * déjà testé, que le mode hors ligne. */
     if (body.source === "api") {
+      // INV-10 vérifié AVANT le premier appel réseau, pas seulement à `manager.start`
+      if (manager.isRunning()) throw new HttpError(409, "un run est déjà en cours (INV-10)");
+      if (vivierApiEnCours) throw new HttpError(409, "un vivier par API est déjà en construction — attendre sa fin (INV-10)");
       if (invRefresher.isRunning()) throw new HttpError(409, "un rafraîchissement d'inventaire est en cours (INV-10)");
       const coord = COORD_ESCALES[station.code];
       if (!coord) {
@@ -483,12 +492,19 @@ export function createDemoServer(opts = {}) {
         throw new HttpError(501, `vivier par API indisponible : ${String(err.message)}`);
       }
       const { checkin, checkout, nights } = resolveDates(scenario, station);
-      const vivier = await construireVivier({
-        station: station.code, coord, checkin, checkout, nuits: nights,
-        rayonM: Math.round((station.search?.radius_km ?? 40) * 1000) || 40000,
-        cle, slugify,
-        onProgress: (etape, data) => hub.publish({ type: "log", etape, ...data }),
-      });
+      let vivier;
+      vivierApiEnCours = true;
+      try {
+        vivier = await construireVivier({
+          station: station.code, coord, checkin, checkout, nuits: nights,
+          rayonM: Math.round((station.search?.radius_km ?? 40) * 1000) || 40000,
+          cle, slugify,
+          onProgress: (etape, data) => hub.publish({ type: "log", etape, ...data }),
+        });
+      } finally {
+        // le verrou tombe même en cas d'échec : sinon un appel raté bloquait tous les suivants
+        vivierApiEnCours = false;
+      }
       if (!vivier.records.length) {
         throw new HttpError(502, "l'API hôtelière n'a rendu aucun établissement exploitable — vérifier la clé, l'escale et les dates");
       }
