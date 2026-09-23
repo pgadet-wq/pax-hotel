@@ -9,11 +9,15 @@ Les mesures réelles (durée, coût, sessions) sont relevées sur le compte H de
 > qu'ils ont été relevés ce jour-là : c'est un procès-verbal, il ne se réécrit pas. Ils ne valent PLUS comme
 > référence depuis la correction de la sonde (20/09) et le chantier C1-C7 (21/09).
 >
-> **Références en vigueur, mesurées le 21/09/2026** : `npm test` **278 cas, 0 échec** ·
-> `rebooking-v2 --offline` **90 dossiers logés / 67 en escalade**, 29 chambres fermes / 99 à confirmer,
-> 8 fichiers écrits (la découverte est sautée hors ligne) · `--dry-run` **85 chambres indicatives pour 173
-> demandées** (couverture INSUFFISANTE, dite comme telle) · **simulation complète 122 logés / 35 escalades**,
+> **Références en vigueur, mesurées le 23/09/2026** : `npm test` **332 cas / 13 suites, 0 échec** ·
+> `rebooking-v2 --offline` **90 dossiers logés / 67 en escalade**, 8 fichiers écrits (la découverte est
+> sautée hors ligne) · `--dry-run` **111 chambres indicatives pour 173 demandées, 15 candidats**
+> (couverture INSUFFISANTE, dite comme telle) · **simulation complète 122 logés / 35 escalades**,
 > 26 569 € la nuit, borne haute 32 900 €, **9 livrables**.
+>
+> Le « 85 chambres pour 173, 12 candidats » du 21/09 n'est plus reproductible depuis `ed0c345`
+> (vivier de repli à appeler) : la couverture reste insuffisante, mais le chiffre a changé.
+> Le « 278 cas » du 21/09 est devenu 332 après les lots API des 22 et 23/09.
 
 
 | Vérification | Résultat |
@@ -27,11 +31,15 @@ Les mesures réelles (durée, coût, sessions) sont relevées sur le compte H de
 > qu'ils ont été relevés ce jour-là : c'est un procès-verbal, il ne se réécrit pas. Ils ne valent PLUS comme
 > référence depuis la correction de la sonde (20/09) et le chantier C1-C7 (21/09).
 >
-> **Références en vigueur, mesurées le 21/09/2026** : `npm test` **278 cas, 0 échec** ·
-> `rebooking-v2 --offline` **90 dossiers logés / 67 en escalade**, 29 chambres fermes / 99 à confirmer,
-> 8 fichiers écrits (la découverte est sautée hors ligne) · `--dry-run` **85 chambres indicatives pour 173
-> demandées** (couverture INSUFFISANTE, dite comme telle) · **simulation complète 122 logés / 35 escalades**,
+> **Références en vigueur, mesurées le 23/09/2026** : `npm test` **332 cas / 13 suites, 0 échec** ·
+> `rebooking-v2 --offline` **90 dossiers logés / 67 en escalade**, 8 fichiers écrits (la découverte est
+> sautée hors ligne) · `--dry-run` **111 chambres indicatives pour 173 demandées, 15 candidats**
+> (couverture INSUFFISANTE, dite comme telle) · **simulation complète 122 logés / 35 escalades**,
 > 26 569 € la nuit, borne haute 32 900 €, **9 livrables**.
+>
+> Le « 85 chambres pour 173, 12 candidats » du 21/09 n'est plus reproductible depuis `ed0c345`
+> (vivier de repli à appeler) : la couverture reste insuffisante, mais le chiffre a changé.
+> Le « 278 cas » du 21/09 est devenu 332 après les lots API des 22 et 23/09.
 
 
 Serveur `node demo/server.mjs` **sans** `DEMO_ALLOW_PAID` (routes payantes verrouillées), navigateur sur `http://127.0.0.1:4310`.

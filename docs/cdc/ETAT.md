@@ -123,7 +123,7 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 
 ## Points bloquants
 
-- **L'inventaire BKK ne peut pas couvrir 324 passagers.** Mesure du 21/09 (`--dry-run`) : **85 chambres indicatives pour 173 demandées**, 12 candidats au vivier. Le run sort « épuisé » et escalade. Contournements : `tools/inventaire.mjs --station BKK --refresh --max 20` (payant, INV-8), ou « Forcer la découverte ». Rien ne corrige cela côté code : c'est un manque de vivier, pas un défaut du moteur.
+- **L'inventaire BKK ne peut pas couvrir 324 passagers.** Mesure du **23/09** (`--dry-run`) : **111 chambres indicatives pour 173 demandées**, 15 candidats au vivier (21/09 : 85 pour 173, 12 candidats — le vivier de repli de `ed0c345` a changé le chiffre, pas le verdict). Le run sort « épuisé » et escalade. Contournements : `tools/inventaire.mjs --station BKK --refresh --max 20` (payant, INV-8), ou « Forcer la découverte ». Rien ne corrige cela côté code : c'est un manque de vivier, pas un défaut du moteur.
 - Conséquence directe : **aucun chiffre de démonstration « sans escalade » n'est atteignable** sur l'inventaire actuel. Toute communication qui annonce « tous les passagers logés » est fausse.
 
 ## Valeurs lues sur le compte H (14-15/09)
@@ -196,6 +196,34 @@ L'adaptateur n'était utilisable qu'en ligne de commande. Une case **« Vivier p
 `127.0.0.1:4310` est le **seul** point d'entrée de l'outil sur ce poste. Le serveur est lié à `127.0.0.1` par défaut (`demo/server.mjs`, `const host = opts.host ?? "127.0.0.1"`), donc injoignable depuis le réseau. Aucune instance déployée n'est référencée : `deploy/` ne contient que des gabarits (`https://IP.PU.BLI.QUE`), et le guide Scaleway impose de **ne jamais ouvrir 4310**, Caddy seul étant exposé en 443.
 
 Les ports `0.0.0.0:3000`, `:8000` et `:8080` observés en écoute appartiennent à **Docker Desktop**, pas à ce projet.
+
+## Audit et guide client (23/09/2026)
+
+Deux documents ajoutés, **hors phase**, sans modification de code : `docs/AUDIT-2026-09-23.md` (audit de l'outil) et `docs/GUIDE-CLIENT.md` (guide de fonctionnement destiné à la compagnie : pourquoi l'outil, ce qu'il est, comment il marche, ce qu'il remplace et ce qu'il renforce, les 7 conditions et leur état).
+
+**Vérifications rejouées le 23/09, chemins GRATUITS seulement** (0 session, 0 $) : `npm test` **332 cas / 13 suites, 0 échec** · `--offline` **90 logés / 67 escalades**, 8 fichiers · `--dry-run` **111 chambres indicatives pour 173 demandées, 15 candidats** · arbre propre · aucun secret dans le dépôt.
+
+**Écarts relevés par l'audit** (les six écarts documentaires ont été **traités le jour même**, voir plus bas ; aucun code n'a été modifié) **:**
+
+- **Dépôt** : `origin/main` est à `64033b0` (16/09) — **13 commits de retard** (7 sur `main` local + 6 sur `feat/approvisionnement-api`). PAXLIST, C1-C7, couronnes, relectures adverses et adaptateur API n'existent que sur ce poste.
+- **`docs/matrice-affectation.md` est faux depuis le 21/09** : il décrit encore l'ordre figé « pmr → famille → J → W → Y » ; 0 occurrence de « couronne », 0 de « prise en charge ». C'est le document de référence des règles d'affectation.
+- **Bornes** : README annonce 18 sessions / 10 $ / 45 min, le code applique **50 / 15 $ / 60 min**. L'écart touche C5 (« moins d'une heure ») : le défaut livré vaut exactement une heure et le dry-run avertit que l'estimation haute (69 min) la dépasse.
+- **PAXLIST** : code et modèles livrés portent **28 colonnes**, `format-liste-passagers.md` aussi ; README (« v1 et v2 ») et CDC §19.1 (« 26 colonnes ») sont périmés — et les 2 colonnes manquantes sont précisément `vol_correspondance` / `heure_correspondance`.
+- **Livrables** : README titre « 8 fichiers », le CDC §19.3 et le code en donnent **9** (un rejeu hors ligne en écrit 8).
+- **Approvisionnement par API** : 0 occurrence de « LiteAPI » ou « API hôtelière » dans README, matrice et déroulé — la réponse au point bloquant principal n'est documentée que dans ce journal.
+- **Référence périmée de ce journal** : le dry-run de référence (« 85 chambres pour 173, 12 candidats », 21/09) donne **111 pour 173 et 15 candidats** depuis `ed0c345` (vivier de repli).
+- **Mesure du jour** : le budget de trajet, dispositif le mieux protégé du lot du 21/09, s'applique à **0 dossier sur 157** — la liste ne porte aucun horaire de correspondance. Le code est prêt, la donnée manque.
+
+**Ordre de valeur recommandé** (détail au §4 de l'audit) : pousser `main` · réécrire la section décisive de `matrice-affectation.md` · aligner README et CDC §19.1 · clé LiteAPI de production · demander les deux colonnes de correspondance à la compagnie · sortir `headroom` de la clé de tri · pré-vol depuis la machine du run · faire rendre les trois arbitrages client.
+
+### Écarts documentaires TRAITÉS le 23/09 (aucun code modifié, `npm test` 332 verts avant et après)
+
+- **`docs/matrice-affectation.md`** : l'ordre figé `pmr → famille → J → W → Y` est remplacé par une section **« Politique de prise en charge »** — 13 critères cochables avec leur rang par défaut, distinction **rang (ordre de service) contre proximité (droit aux couronnes)**, sémantique exacte de `stricte`/`preferee`/`aucune` relue dans `passesCouronnes`/`tryTier`, formule et statut de **contrainte DURE** du budget de trajet, couronnes **déclarées jamais mesurées** avec les trois fiches livrées, et règle de rattachement par prudence. Ajouts : les couronnes à « Escale : libre », les **trois sources du vivier** en tête de la section recherche.
+- **`README.md`** : bornes alignées sur `DEFAULT_POLICY` (50 · 15 $ · 4 · **60 min**) **avec un encadré « arbitrage en attente »** — 60 min vaut exactement l'heure visée par C5, l'intention documentée était 45, la valeur voulue reste à trancher · livrables **9** avec `candidats-<run>.json` et la distinction run / rejeu · **PAXLIST v3 (28 colonnes)** avec le rôle de `heure_correspondance` · nouvelle section **« Le vivier d'hôtels — trois sources »** (plafond de 9, mesures du 22/09, réserve bac à sable, trois règles câblées) · `LITEAPI_KEY` et `DEMO_TRUSTED_PROXY` au tableau des variables · commandes API · 5 limites connues ajoutées (bac à sable, couronnes déclarées, budget sans horaire, non-monotonie du plafond).
+- **`CAHIER_DES_CHARGES.md`** : §19.1 corrigé **26 → 28 colonnes** avec la raison de l'écart ; deux amendements datés ajoutés — **§19.6** (ordre de traitement, couronnes, budget de trajet : le §7 ne faisait plus foi) et **§19.7** (approvisionnement par API, que le §2.2 plaçait hors périmètre, avec le statut des invariants et la question `prebook`) ; en-tête du §19 daté « 21/09 et 23/09 ».
+- **`recette-demo-v2.md`** (deux encadrés), **`format-liste-passagers.md`** et les **points bloquants** de ce journal portent la mesure du 23/09 (**111/173, 15 candidats**, 332 tests) en disant ce qui a changé et pourquoi. Les procès-verbaux datés du 15 et du 21/09 ne sont pas réécrits.
+
+**Non traités, et c'est volontaire** : tout ce qui relève du comportement (constats A de l'audit) et de la livraison (constats C). En particulier, la valeur de `max_minutes_per_run` est un **arbitrage produit**, pas un écart de documentation : le README le nomme désormais au lieu de le masquer.
 
 ## Prochaine phase
 

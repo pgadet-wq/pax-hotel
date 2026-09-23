@@ -35,11 +35,25 @@ la liste étant relue sur le disque à chaque saisie — un déroutement se prod
 pas. Un code sans fiche est refusé avec la liste des fiches présentes et le chemin où déposer la nouvelle.
 Fiches livrées : BKK, CDG, NOU.
 
+Chaque fiche porte la zone de recherche, le rayon et sa référence (aéroport ou centre de zone), le
+transfert, le facteur de plafond (`price_cap_factor`), des hôtels de repli, et — depuis le 21/09/2026 —
+les **couronnes de distance** avec leur temps de trajet **déclaré** (voir « Politique de prise en
+charge » ci-dessous).
+
 ## Ce que la recherche filtre, et ce qu'elle ne peut pas filtrer
 
-Avant de juger, il faut trouver. La découverte ouvre une recherche de zone Booking et y ajoute des filtres
-`nflt` dérivés de la politique et de la fiche escale. `rebooking-v2 --dry-run` et `inventaire --dry-run`
-affichent **l'URL exacte de chaque passe** avec ses filtres et leur origine.
+Avant de juger, il faut trouver. Le vivier d'hôtels a **trois sources**, à choisir avant le run :
+l'**inventaire de l'escale** constitué à l'avance (`data/inventaire/<CODE>.json`), la **découverte par
+agents** sur les pages publiques, et — depuis le 22/09/2026 — l'**API hôtelière** (`lib/liteapi.mjs`,
+case « Vivier par API hôtelière » dans l'UI), qui interroge un distributeur sans agent ni lecture
+d'écran. Les entrées venues d'une API portent `source: "api"` et ne se déclarent jamais « agent ».
+
+Le reste de cette section décrit la **découverte par agents** : elle ouvre une recherche de zone
+Booking et y ajoute des filtres `nflt` dérivés de la politique et de la fiche escale.
+`rebooking-v2 --dry-run` et `inventaire --dry-run` affichent **l'URL exacte de chaque passe** avec ses
+filtres et leur origine. Par une API, les mêmes exigences sont appliquées **au jugement du relevé** et
+non à la requête : la conformité, elle, se calcule exactement de la même façon quelle que soit la
+source.
 
 | Filtre | Origine | Statut |
 |---|---|---|
@@ -62,8 +76,109 @@ Chaque passe porte donc son URL **sans** filtre de prix, comme parade. Les codes
 | **PMR** | passager PMR dans le dossier | chambre accessible **requise**, poids distance ×2 au score, surclassement de tier autorisé ; note « transfert adapté à confirmer par l'hôtel ». **Le chambrage PMR n'est PAS déduit** : sans `chambres_demandees`, un PMR est apparié comme un adulte ordinaire (un WCHC et son accompagnante partagent une chambre double). L'ingestion compte et signale les dossiers concernés (`pmr_chambrage_devine`) |
 | **Famille** | enfant (CHD) ou bébé (INF) dans le dossier | chambre familiale (≤ 2 ADT + 2 CHD) ou **2 chambres communicantes dans le même hôtel** ; INF : berceau, ne compte pas dans la capacité |
 
-Ordre de traitement des files : **pmr → famille → J → W → Y** (priorités éditables).
 Un dossier (PNR) est indivisible : tous ses occupants vont dans le même hôtel.
+
+L'**ordre de traitement** n'est plus figé (il l'était jusqu'au 21/09/2026 : `pmr → famille → J → W → Y`).
+Il est désormais gouverné par la politique de prise en charge, ci-dessous.
+
+## Politique de prise en charge — qui est servi d'abord, qui a droit aux hôtels proches
+
+`policy.global.prise_en_charge` porte **13 critères cochables** (`CRITERE_KEYS`, `lib/policy.mjs`).
+Chacun est activable, porte un **rang** et un **droit à la proximité**. L'UI les présente en cases à
+cocher ; avant le 21/09 le champ était un texte libre **sans effet**, dont toute valeur inattendue
+était ignorée en silence.
+
+| Rang | Critère (`cle`) | Proximité par défaut |
+|---|---|---|
+| 1 | `correspondance_serree` — horaire du vol suivant | **stricte** |
+| 2 | `medical` — cas médical ou civière | **stricte** |
+| 3 | `pmr` — mobilité réduite | préférée |
+| 4 | `mineur_seul` — mineur non accompagné | préférée |
+| 5 | `bebe` — famille avec bébé ou enfant en bas âge | préférée |
+| 6 | `famille` | aucune |
+| 7 | `equipage` — repos réglementaire | préférée |
+| 8 · 9 · 10 | `J` · `W` · `Y` — cabine | aucune |
+| 11 | `groupe` | aucune (inactif par défaut) |
+| 12 | `sans_droit_entree` | aucune |
+| 99 | `flying_blue` — **départage seulement** | aucune |
+
+Un critère marqué `departage: true` (Flying Blue) **ne crée jamais de file** : il ne joue qu'à
+l'intérieur d'une file, pour départager deux dossiers de même rang. La valeur de départage est
+graduée (PLATINUM > GOLD > SILVER).
+
+Une politique enregistrée **avant le 21/09/2026**, qui ne porte pas `prise_en_charge`, retombe sur
+« proximité : aucune » — c'est-à-dire l'ancien comportement, où seule la distance au score jouait.
+
+### Rang et proximité ne font pas le même travail
+
+| Réglage | Ce qu'il décide | Ce qu'il ne décide pas |
+|---|---|---|
+| **rang** | l'**ordre de service** : qui passe avant qui dans la file d'attribution | rien sur la distance |
+| **proximité** | le **droit aux couronnes proches** | rien sur l'ordre |
+
+Concrètement, pour un dossier :
+
+- **`stricte`** — on ne sort **pas** de la couronne la plus proche admissible tant qu'elle a du stock.
+  Si elle en a encore mais qu'aucune de ses chambres ne convient, le dossier **escalade** plutôt que
+  d'être éloigné.
+- **`preferee`** — la couronne la plus proche est essayée seule, puis les suivantes **une par une**,
+  et seulement si la politique autorise l'élargissement.
+- **`aucune`** — toutes les couronnes admissibles sont examinées en une seule passe ; la distance ne
+  joue plus que dans le score de départage.
+
+**Un rang seul ne protège personne.** Si les PMR sont servis d'abord et épuisent le vivier proche, le
+passager qui repart à 05h40 finit à 40 km. C'est le budget de trajet, ci-dessous, qui l'en empêche.
+
+### Le budget de trajet — une contrainte DURE
+
+`dossier.trajet_max_min` est calculé sur l'horaire du vol suivant (`heure_correspondance`) :
+
+```
+utile  = fenêtre jusqu'au vol suivant − avance_avant_vol − marge − repos_minimal
+trajet_max_min = ⌊ utile / 2 ⌋        (aller ET retour)
+```
+
+Réglages : `policy.global.correspondance` — avance 120 min, repos minimal 240 min, marge 30 min,
+seuil « serrée » 480 min.
+
+- **Aucun rang ne l'outrepasse.** Les hôtels dont la couronne dépasse le budget sont retirés **avant**
+  toute passe d'attribution, quel que soit le rang du dossier.
+- `trajet_max_min ≤ 0` → escalade **« correspondance trop serrée »** (repos côté piste).
+- **Pas d'horaire = pas de contrainte, et jamais de budget inventé.** Le dossier n'est pas non plus
+  réputé « serré ». Une fenêtre aberrante est bornée à 72 h là où le budget se calcule.
+- Chaque dossier porte une **`explication` en toutes lettres**, pour qu'un agent d'escale puisse
+  contester le calcul.
+- Quand le budget est en cause dans un échec, le motif d'escalade le dit (`aucun_hotel` /
+  `hors_budget`) : écrire « capacité » enverrait des agents relever des hôtels de plus alors que des
+  chambres existent — hors d'atteinte.
+
+> **À savoir avant de s'appuyer dessus.** Sans les colonnes `vol_correspondance` et
+> `heure_correspondance` dans la liste passagers, **aucun dossier n'est sous contrainte** et le
+> dispositif ne protège personne. Le dry-run le dit explicitement, dossier par dossier.
+
+### Les couronnes de distance — déclarées, jamais mesurées
+
+`station.search.couronnes[]` (fiche escale) découpe la zone en couronnes, chacune avec un rayon et un
+**temps de trajet DÉCLARÉ par l'exploitation**. L'outil n'a **aucun service de routage** et **ne
+convertit jamais une distance en durée** : ces temps sont étiquetés « déclarés, non mesurés » partout
+où ils s'affichent.
+
+| Escale | Couronnes (rayon / temps déclaré) |
+|---|---|
+| BKK | 5 km / 15 min · 15 km / 35 min · 40 km / 60 min |
+| CDG | 5 km / 15 min · 15 km / 35 min · 40 km / 60 min |
+| NOU | 15 km / 45 min · 45 km / 60 min · 60 km / 75 min |
+
+Rattachement d'un hôtel à une couronne, dans l'ordre : la couronne de la **passe de recherche** qui
+l'a trouvé, sinon sa **distance mesurée**, sinon — **par prudence — la couronne la plus lointaine
+déclarée**. Un hôtel sans distance connue n'est **pas** réputé proche : le supposer reviendrait à
+loger un passager en correspondance serrée à 40 km sur une supposition. La conséquence est que le
+premier chiffre de couverture affiché est **pessimiste** ; la réponse est de relever les distances,
+pas de toucher au code.
+
+Le plan porte la traçabilité complète : `couronne`, `couronne_source` (passe / distance / inconnue /
+hors couronnes), `couronne_trajet_min_declare` et `trajet_max_min`. La restitution par couronne est
+reprise au rapport, aux fiches (heure limite de retour à l'aéroport) et à l'écran de validation.
 
 ## Conformité d'un hôtel pour un tier (EX-ALL-2)
 
@@ -162,9 +277,11 @@ Quand un type de chambre est plafonné par l'affichage (« Only X left », borne
    ≤ `probe_no_rooms_max` (30) chambres testées — lecture seule, jamais de réservation ;
 2. sinon **relevé** du candidat suivant de la découverte ;
 3. par **vagues** (taille `auto` = concurrence du plan), jusqu'à couverture des manques ou borne atteinte :
-   `max_sessions_per_run` 18 · `max_cost_usd_per_run` 10 $ · `max_waves` 4 · **`max_minutes_per_run` 45 min**
-   — visibles en permanence dans le bandeau, éditables, annulation de l'extension seule possible (plan
-   conservé, escalade chiffrée).
+   `max_sessions_per_run` **50** · `max_cost_usd_per_run` **15 $** · `max_waves` 4 ·
+   **`max_minutes_per_run` 60 min** (défauts de `DEFAULT_POLICY` au 23/09/2026 ; ce paragraphe annonçait
+   18 · 10 $ · 45 min, l'intention d'origine — **la valeur voulue reste à trancher**, voir l'encadré du
+   README § « Bornes d'extension ») — visibles en permanence dans le bandeau, éditables, annulation de
+   l'extension seule possible (plan conservé, escalade chiffrée).
 
 Le **budget d'horloge** (C5, « réserver en moins d'une heure ») est une borne de plein exercice, au même rang
 que les vagues, les sessions et le coût. L'échéance du run est calculée une fois et propagée aux relevés : un

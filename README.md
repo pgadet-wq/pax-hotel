@@ -41,6 +41,8 @@ Le périmètre est arrêté au CDC §2.2 ; ces limites sont des choix, pas des m
 | `HAI_API_KEY` | clé Agents API H Company (serveur uniquement, jamais commitée) |
 | `HAI_API_BASE_URL` | optionnelle — origine de l'API (défaut : point d'entrée européen `https://agp.eu.hcompany.ai`, journalisé au démarrage du client) |
 | `DEMO_ALLOW_PAID` | `1` pour déverrouiller les sessions payantes (run réel, Étage 0 par agents), exportée pour la commande seule, après accord explicite — sans elle le serveur répond 501 (INV-8) |
+| `LITEAPI_KEY` | clé de l'API hôtelière (bac à sable `sand_…` ou production `prod_…`), lue dans l'environnement ou `~/.config/liteapi/.env`, **jamais journalisée** — voir « Le vivier d'hôtels » |
+| `DEMO_TRUSTED_PROXY` | adresses du proxy d'identité déclaré de confiance pour la validation humaine (C6), ou `any` ; vide par défaut, et l'absence est écrite dans le journal plutôt que suppléée |
 
 ### Commandes
 
@@ -55,6 +57,15 @@ node hai-admin-mcp/tools/rebooking-v2.mjs --in liste-compagnie.csv --offline dat
 node hai-admin-mcp/tools/inventaire.mjs --station BKK --dry-run       # Étage 0 sans agent
 node hai-admin-mcp/tools/inventaire.mjs --station BKK --preflight     # contrôle HTTP des fiches, 0 €
 DEMO_ALLOW_PAID=1 node hai-admin-mcp/tools/inventaire.mjs --station BKK --refresh --max 10  # Étage 0 réel (payant)
+```
+
+Vivier par API hôtelière (aucun agent, aucune réservation — voir « Le vivier d'hôtels ») :
+
+```
+node hai-admin-mcp/tools/sonde-api.mjs --preflight                    # quelles API répondent, sans clé
+node hai-admin-mcp/tools/sonde-api.mjs --liteapi --station BKK        # mesure de couverture
+node hai-admin-mcp/tools/liteapi-releves.mjs --station BKK --chambres 5 --rayon 40
+node hai-admin-mcp/tools/rebooking-v2.mjs --offline out/releves-liteapi-<run>.json --in <liste.csv>
 ```
 
 Probes unitaires payants (phase 5) : `rebooking-v2 --probe-discovery | --probe-releve <n> | --probe-capacity <url> --rooms <n>`, toujours derrière `DEMO_ALLOW_PAID=1`.
@@ -82,7 +93,7 @@ reste candidate. Depuis certains réseaux (proxy d'entreprise, bac à sable) tou
 pré-vol se joue depuis la machine qui hébergera le run, sinon il ne sert à rien. Code de sortie 3 s'il y a au
 moins une fiche morte ou redirigée, 0 sinon.
 
-### Livrables d'un run — 8 fichiers dans `out/`
+### Livrables d'un run — 9 fichiers dans `out/`
 
 | Fichier | Contenu |
 |---|---|
@@ -93,7 +104,13 @@ moins une fiche morte ou redirigée, 0 sinon.
 | `messages-<run>.csv` | messages passagers FR et EN (à diffuser par le système de la compagnie) |
 | `rapport-<run>.md` | scénario, politique appliquée, relevés horodatés, plan par cabine, escalades, avertissements |
 | `cout-<run>.json` | coût par nuit et projection, ventilés par devise, et la commande de cartes prépayées |
+| `candidats-<run>.json` | les hôtels rapportés par la découverte (absent d'un rejeu `--offline`, qui la saute) |
 | `releves-<run>.json` | relevés bruts — rejouables tels quels par `--offline` |
+
+Un run **avec découverte** écrit ces **9** fichiers ; un rejeu `--offline` en écrit **8** (pas de
+découverte, donc pas de `candidats-<run>.json`). Écrits à côté sans être des livrables :
+`run-<run>.state.json` (nominatif, jamais téléchargeable), `validation-<run>.json` (journal
+append-only C6), `pax-<run>.json` (empreinte non nominative de la liste) et `retention.log`.
 
 Sont **nominatifs** : le plan, la liste d'appel, les fiches, les messages, le **rapport** (il porte la liste
 d'appel : noms, composition des chambres, mentions PMR) et l'état de run `run-<run>.state.json` (écrit dans
@@ -113,6 +130,41 @@ publié auparavant datait d'avant la correction de la sonde (19-20/09) et reposa
 Vitesse ×1/×5/×20.
 Disponible pour BKK uniquement (CDG/NOU : dry-run et message explicite). Rechargement d'onglet → snapshot complet ;
 double-run → 409 ; annulation propre (plan conservé en l'état).
+
+### Le vivier d'hôtels — trois sources
+
+Avant de juger, il faut trouver, et c'est le vivier qui décide si le plan tiendra. Trois sources, à
+choisir avant le run (elles s'excluent à l'écran) :
+
+| Source | Ce que c'est | Coût | État |
+|---|---|---|---|
+| **Inventaire de l'escale** | `data/inventaire/<CODE>.json`, constitué à l'avance (Étage 0), avec paiement société et drapeaux contracté / préféré / exclu | gratuit | en service |
+| **Agents web Holo** | découverte + relevés + sondes de capacité sur les pages publiques | payant (~2,5 $ le run) | en service, éprouvé en réel le 16/09 |
+| **API hôtelière (LiteAPI)** | interrogation directe d'un distributeur, prix publics, **aucun agent** | quasi nul | livré le 22-23/09, **à confirmer sur clé de production** |
+
+**Pourquoi la troisième source existe.** Le sélecteur de quantité des plateformes grand public
+**plafonne à 9 chambres par hôtel** : 12 hôtels × 9 ≈ 110 chambres indicatives, quel que soit le
+moteur — pour 173 demandées par un A350 plein. Aucune correction de code ne lève ce plafond. Mesuré le
+22/09 sur BKK par API : **185 hôtels et 11 059 offres en un appel de 7 s**, et un plan à **171 dossiers
+logés / 288 personnes sur 324** (rejeu hors ligne, 0 session, 0 $) contre 122/35 en simulation sur les
+12 hôtels.
+
+**Réserve à ne pas omettre** : ces mesures viennent d'une **clé de bac à sable** (la réponse porte
+`"sandbox": true`). Le protocole est prouvé, **les volumes sont des données de test** — à remesurer
+avec une clé de production. Trois runs consécutifs ont rendu 36 hôtels, puis 13, puis 8 : **toute
+répétition avant une démonstration se fait juste avant, pas la veille.**
+
+Trois règles nées de la mesure sont câblées et testées : `limit` ≤ 40 (au-delà, la requête
+multi-chambres casse) · tout appel est rejoué · **un zéro est recoupé à `limit` plus bas avant d'être
+cru** — l'API répond « no availability found » au lieu d'une erreur, et un adaptateur naïf annoncerait
+« aucune chambre à Bangkok » alors qu'il y en a des centaines. La distance est réglée à la racine : les
+coordonnées de la fiche donnent une distance calculée qui **porte sa référence** (`distance_ref`), au
+lieu d'expédier tout hôtel en couronne la plus lointaine.
+
+L'UI construit le vivier **en mémoire** et rejoue par le même chemin que le mode hors ligne : aucune
+session payante, INV-1 et INV-8 non concernés, et l'inventaire versionné n'est pas modifié. La
+persistance délibérée reste sur `tools/liteapi-releves.mjs --ecrire-inventaire`. Une entrée venue d'une
+API porte `source: "api"` et ne se déclare jamais « agent ».
 
 ### Onglet Inventaire (Étage 0)
 
@@ -135,7 +187,7 @@ Fiches livrées : `BKK`, `CDG`, `NOU`. Chacune porte la zone de recherche, le ra
 (`price_cap_factor`, CDG 1.0 — H-5) et des hôtels de repli. Plafond effectif par cabine = plafond
 politique × facteur.
 
-### Liste passagers — PAXLIST v1 et v2
+### Liste passagers — PAXLIST v3 (28 colonnes)
 
 `--in <liste.csv>` ingère la liste de la compagnie (CSV `;` ou `,`, UTF-8 ou Windows-1252, en-têtes tolérants).
 Colonnes obligatoires : `pnr`, `nom`, `type_pax`, `cabine`. Le rapport d'ingestion est imprimé avant tout
@@ -147,8 +199,22 @@ d'enregistrement. Trois d'entre elles — `date_naissance`, `nationalite`, `pass
 registre d'hôtel exige partout : sans elles la fiche part avec des blancs, l'agent d'escale ouvrant le
 passeport au comptoir. Le rapport d'ingestion chiffre ce manque (« n/m fiches complètes ») **avant** le run,
 au lieu de le découvrir au comptoir. Une liste v1 reste acceptée telle quelle : les colonnes absentes restent
-vides, rien n'est deviné. Gabarits : `data/exemples/paxlist-modele-a-remplir.csv` et
-`docs/format-liste-passagers.md`.
+vides, rien n'est deviné.
+
+La **v3 (21/09/2026) ajoute deux colonnes, facultatives elles aussi** : `vol_correspondance` et
+**`heure_correspondance`**. C'est la seconde qui commande. À partir de l'horaire du vol suivant, l'outil
+calcule un **budget de trajet** par dossier — `(fenêtre − avance − marge − repos minimal) / 2`, divisé par
+deux parce qu'il faut aller ET revenir — et ce budget est une **contrainte DURE** qu'aucun rang de priorité
+n'outrepasse : un hôtel dont la couronne dépasse le budget est retiré avant toute attribution. **Sans ces
+colonnes, aucun dossier n'est sous contrainte** et aucune correspondance n'est protégée ; l'outil le dit
+dossier par dossier plutôt que d'inventer un horaire. Voir `docs/matrice-affectation.md`
+§ « Politique de prise en charge ».
+
+**Total : 28 colonnes canoniques** (`PAXLIST_COLS`) — 18 de la v1, `classe_reservation`, les 7 d'identité
+de la v2, les 2 de correspondance de la v3. Les trois fichiers remis à la compagnie portent exactement les
+mêmes 28 colonnes, verrouillé par test. Gabarits : `data/exemples/paxlist-modele-a-remplir.csv`,
+`data/exemples/paxlist-dictionnaire-colonnes.csv`, `data/exemples/paxlist-exemple.csv` ; spécification
+complète : `docs/format-liste-passagers.md`.
 
 ### Recherche : ce qui est filtré, ce qui ne l'est pas
 
@@ -189,10 +255,10 @@ L'outil n'émet ni ne charge aucune carte.
 
 | Borne | Défaut | Effet |
 |---|---|---|
-| `max_sessions_per_run` | 18 | sessions d'extension d'un run |
-| `max_cost_usd_per_run` | 10 $ | coût agents d'un run |
+| `max_sessions_per_run` | 50 | sessions d'extension d'un run |
+| `max_cost_usd_per_run` | 15 $ | coût agents d'un run |
 | `max_waves` | 4 | vagues d'extension |
-| **`max_minutes_per_run`** | **45 min** | **budget d'horloge du run entier (C5)** — quatrième borne, au même rang que les trois autres |
+| **`max_minutes_per_run`** | **60 min** | **budget d'horloge du run entier (C5)** — quatrième borne, au même rang que les trois autres |
 | `probe_no_rooms_max` | 30 | chambres testées par une sonde de capacité |
 | `hotel_cap_without_probe` | 20 | **seuil de VIGILANCE**, pas un plafond : au-delà, le volume à confirmer engagé chez un même hôtel est signalé au validateur et l'hôtel désigné prioritaire à sonder — **aucune chambre n'est retranchée du plan** |
 | `room_qty_sane_max` | 60 | au-delà, une quantité affichée est jugée aberrante, ramenée et signalée |
@@ -201,6 +267,13 @@ Le budget d'horloge répond à la demande « réserver en moins d'une heure » :
 fois, propagée aux relevés, et un relevé qui ne peut plus démarrer à temps est compté `skipped_budget` — jamais
 confondu avec un échec d'agent. L'arrêt (borne atteinte ou annulation de l'extension seule) laisse le plan en
 l'état avec escalade chiffrée. `--dry-run` estime la durée du run face à ce budget.
+
+> **Arbitrage en attente (relevé le 23/09/2026).** Les valeurs ci-dessus sont celles de `DEFAULT_POLICY`
+> (`lib/policy.mjs`) : ce tableau a été aligné sur le code, qui fait foi. Ce même tableau annonçait
+> jusqu'ici 18 sessions / 10 $ / **45 min** — l'intention documentée à l'origine. Un budget d'horloge de
+> **60 min vaut exactement l'heure visée par C5**, pas moins : le dry-run avertit d'ailleurs quand son
+> estimation haute la dépasse. **La valeur voulue reste à trancher** ; en attendant, elle s'édite dans le
+> formulaire avant chaque run.
 
 ### Limites connues
 
@@ -218,6 +291,18 @@ l'état avec escalade chiffrée. `--dry-run` estime la durée du run face à ce 
   Elle ne compte pas le temps humain de validation.
 - La sonde de capacité réelle (H-3) reste à confirmer sur un vrai cas de plafond en run réel ; si elle se révèle
   non concluante : `probe_same_hotel_first = false` (extension par candidats suivants seulement).
+- Le vivier par **API hôtelière** n'est mesuré qu'en **bac à sable** : le protocole est prouvé, les volumes et
+  les tarifs sont des données de test. À remesurer sur une clé de production avant toute annonce de couverture.
+- Les **temps de trajet des couronnes sont DÉCLARÉS** par l'exploitation, jamais mesurés : l'outil n'a aucun
+  service de routage et ne convertit pas une distance en durée. Un hôtel sans distance connue est rattaché
+  **par prudence** à la couronne la plus lointaine — la couverture affichée est donc pessimiste.
+- Le **budget de trajet ne protège que les dossiers dont la liste porte `heure_correspondance`** ; sans cette
+  colonne, aucun dossier n'est sous contrainte, et l'outil le dit au lieu d'inventer un horaire.
+- **Le levier « plafond de prix » n'est pas monotone.** L'allocation en deux passes a supprimé la falaise
+  (157 logés à 80 €, 62 à 150 € avant correction), mais le plafond entre aussi dans le CLASSEMENT des hôtels :
+  mesuré, monter le plafond Y de 50 à 70 € fait passer de 87 à 83 dossiers logés, à nombre de chambres
+  constant. La mesure est figée par `test/allocate-monotonie.test.mjs` ; le correctif (sortir `headroom` de la
+  clé de tri) reste à faire.
 
 ## Contenu
 
@@ -291,6 +376,10 @@ Aucune session payante avant la phase 5. En phases 5, 6 et 7, Claude Code annonc
 | `HAI_API_KEY` | clé Agents API H Company, jamais commitée |
 | `HAI_API_BASE_URL` | point d'entrée européen `https://agp.eu.hcompany.ai/api/v2` (nom de l'option du SDK TypeScript à relever en phase 0) |
 | `DEMO_ALLOW_PAID` | `1` pour autoriser une commande payante, le temps de cette commande |
+
+Ce tableau est celui du **pack de développement** (phases 0 à 7). Le tableau complet de l'outil livré —
+avec `LITEAPI_KEY` et `DEMO_TRUSTED_PROXY` — est en tête de ce fichier, § « Variables d'environnement »
+du mode d'emploi.
 
 ## Hypothèses à confirmer
 
