@@ -599,7 +599,7 @@ Toute valeur lue sur la page « Plans and limits » du compte H (concurrence, mo
 
 ---
 
-## 19. Amendements datés (21/09/2026)
+## 19. Amendements datés (21/09 et 23/09/2026)
 
 Ce cahier des charges est aussi un document historique : les sections d'origine ne sont pas réécrites.
 Les amendements ci-dessous disent ce que le code fait **réellement** là où il a dépassé la spécification.
@@ -610,10 +610,17 @@ En cas de contradiction, ce sont eux qui font foi.
 Le §5.5 décrit les colonnes du générateur v1/v2. La porte d'entrée nominale est désormais l'**ingestion
 d'une liste de compagnie au format PAXLIST** (`lib/paxlist.mjs`, ~1 000 lignes) : décodage BOM / UTF-16 /
 repli windows-1252, parseur RFC 4180 borné, détection de séparateur, alias d'en-têtes et de valeurs,
-schéma `zod` par ligne, rapport d'ingestion bloquant. **26 colonnes canoniques** (`PAXLIST_COLS`), dont
+schéma `zod` par ligne, rapport d'ingestion bloquant. **28 colonnes canoniques** (`PAXLIST_COLS`), dont
 sept d'identité pour les fiches C3. Spécification de référence : `docs/format-liste-passagers.md`.
 Fichiers remis à la compagnie : `data/exemples/paxlist-{modele-a-remplir,exemple,dictionnaire-colonnes}.csv`
-— les trois portent exactement les mêmes 26 colonnes, verrouillé par test.
+— les trois portent exactement les mêmes 28 colonnes, verrouillé par test.
+
+> **Corrigé le 23/09/2026.** Cet amendement annonçait **26** colonnes : c'était le compte de la v2, au
+> matin du 21/09. Le second chantier du même jour a porté le format en **v3** en ajoutant
+> `vol_correspondance` et `heure_correspondance` — les deux colonnes dont dépend le budget de trajet
+> (§19.6). Le code, les trois fichiers remis à la compagnie et `docs/format-liste-passagers.md` portent
+> 28 colonnes ; seul ce paragraphe était resté à 26, ce qui aurait conduit un export bâti sur le CDC à
+> omettre exactement les colonnes qui protègent les correspondances.
 
 ### 19.2 — §5.7bis · Ligne du plan : 36 colonnes
 
@@ -657,3 +664,65 @@ au démarrage du serveur, à la fin d'un run, et sur demande de l'opérateur. Le
 politique du **dernier run lancé**. Chaque purge écrit le seuil ET sa provenance dans `out/retention.log`.
 `rapport-<run>.md` est classé nominatif mais **volontairement non purgé** : arbitrage client non rendu,
 dit à chaque purge. La CLI `rebooking-v2` ne purge rien.
+
+### 19.6 — §7bis · Ordre de traitement : politique de prise en charge et couronnes (21/09/2026)
+
+Le §7 et la matrice d'affectation d'origine fixaient un ordre de files **figé** : `pmr → famille →
+J → W → Y`, et la distance n'entrait que dans un score de tri, **jamais dans l'affectation**. Le champ
+« priorités » de l'UI était un texte libre **sans effet** : toute autre valeur était ignorée en silence.
+
+Ce qui fait foi désormais :
+
+- `policy.global.prise_en_charge` porte **13 critères cochables** (`CRITERE_KEYS`), chacun avec un
+  **rang** (ordre de service) et une **proximité** (`stricte` / `preferee` / `aucune`). Un critère
+  `departage: true` (Flying Blue) **ne crée jamais de file** ; il départage à l'intérieur d'une file.
+  Une politique enregistrée avant le 21/09 retombe sur « proximité : aucune », c'est-à-dire
+  l'ancien comportement.
+- `policy.global.correspondance` : avance avant vol 120 min, repos minimal 240 min, marge 30 min,
+  seuil « serrée » 480 min.
+- **`dossier.trajet_max_min` est une CONTRAINTE DURE** qu'aucun rang n'outrepasse :
+  `(fenêtre − avance − marge − repos_minimal) / 2`, divisé par deux pour l'aller ET le retour. Les
+  hôtels hors budget sont retirés **avant** toute passe. `≤ 0` → escalade « correspondance trop
+  serrée ». **Pas d'horaire = aucune contrainte, jamais de budget inventé.** Chaque dossier porte une
+  `explication` en toutes lettres.
+- `station.search.couronnes[]` + `couronnesDe(station)` : les **temps de trajet sont DÉCLARÉS par
+  l'exploitation, jamais mesurés** — aucun service de routage, aucune conversion d'une distance en
+  durée. Un hôtel dont la couronne est indéterminée est rattaché **par prudence** à la plus lointaine.
+- Traçabilité au plan : `couronne`, `couronne_source`, `couronne_trajet_min_declare`, `trajet_max_min`.
+  Restitution par couronne au rapport, aux fiches et à l'écran de validation.
+
+Document de référence tenu à jour : `docs/matrice-affectation.md`
+§ « Politique de prise en charge ».
+
+**Ce que la politique ne fait pas** : elle décide **qui** va loin et qui n'en a pas le droit ; elle ne
+fabrique pas les chambres manquantes. Mesuré à BKK, les trois couronnes ouvertes ne suffisent pas.
+
+### 19.7 — §2.2bis · Approvisionnement du vivier par API hôtelière (22-23/09/2026)
+
+Le §2.2 plaçait les « API hôtelières B2B » hors périmètre. Une **API hôtelière en libre-service**
+(inscription immédiate, sans contrat ni volume minimum) y est entrée, le client ayant écarté les
+passerelles B2B contractuelles pour raison de coût.
+
+> **Portée de cet amendement sur `main` (24/09/2026).** Le code décrit ci-dessous vit sur la branche
+> `feat/approvisionnement-api` et **n'est pas fusionné dans `main`**. L'amendement est consigné ici
+> parce qu'il tranche un point de périmètre du §2.2 ; il ne décrit pas l'état du code de `main`.
+> La fusion attend la remesure sur clé de production.
+
+Motif : le point bloquant « vivier insuffisant » avait une cause que la lecture d'écran ne pouvait pas
+lever — **le sélecteur de quantité des plateformes grand public plafonne à 9 chambres**. Les 111
+chambres indicatives, c'était 12 hôtels multipliés par ce plafond.
+
+- Livré : `lib/liteapi.mjs`, `tools/liteapi-releves.mjs`, `tools/sonde-api.mjs`, `test/liteapi.test.mjs`.
+  Une seule modification du code existant : `source: z.enum([…, "api"])` dans `lib/inventaire.mjs` — une
+  entrée venue d'une API ne se déclare pas « agent ».
+- **INV-1 et INV-2 intacts** : ni `prebook`, ni `book`, ni moyen de paiement ; aucune émulation de
+  navigateur. INV-3 intact : prix publics. INV-8 non concerné : aucune session d'agent.
+- L'UI construit le vivier **en mémoire** et rejoue par le chemin déjà testé du mode hors ligne ;
+  l'inventaire versionné n'est pas modifié.
+- Trois règles nées de la mesure, câblées et testées : `limit` ≤ 40 · tout appel rejoué · **un zéro est
+  recoupé à `limit` plus bas avant d'être cru** (l'API répond « no availability found » au lieu d'une
+  erreur).
+- **Réserve** : mesuré sur **clé de bac à sable** (`"sandbox": true`). Le protocole est prouvé, le stock
+  ne l'est pas.
+- **Reste à trancher** : `prebook` (blocage d'inventaire 5 à 15 min à tarif garanti, **sans réserver**)
+  tombe-t-il ou non sous INV-1 ?

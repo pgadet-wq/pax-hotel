@@ -140,7 +140,9 @@ Le fichier d'exemple du dépôt porte des identités entièrement fictives.
 ### 3.3ter Correspondance — 2 colonnes optionnelles ajoutées en v3 (le budget de trajet)
 
 **Le problème que ces colonnes résolvent.** Le vivier d'hôtels proches de BKK ne couvre pas 324 passagers
-(85 chambres indicatives pour 173 demandées, mesuré). La seule issue est d'**élargir la distance** — et dès
+(**111 chambres indicatives pour 173 demandées**, mesuré le 23/09/2026 ; 85 au 21/09, avant l'ajout du
+vivier de repli — la couverture reste insuffisante dans les deux cas). La seule issue est d'**élargir la
+distance** — et dès
 qu'on élargit, il faut savoir **qui peut aller loin**. Un passager dont le vol suivant part dans 20 h peut
 être logé à 40 km ; un passager qui repart à 05h40 ne le peut pas. Cette information n'existait nulle part :
 la v2 portait `destination_finale` (où il va) mais aucun **horaire** (quand il repart).
