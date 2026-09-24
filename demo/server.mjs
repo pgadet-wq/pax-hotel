@@ -23,7 +23,7 @@ import {
 } from "../hai-admin-mcp/lib/policy.mjs";
 import { DEFAULT_AVION, DEFAULT_SCENARIO, mergeConfig, resolveDates, stationClock, contexteEscale } from "../hai-admin-mcp/lib/scenario.mjs";
 import { loadStation, listStations, couronnesDe } from "../hai-admin-mcp/lib/stations.mjs";
-import { loadInventaire, normalizeInventaire, isStale, candidatesFrom, slugify, capaciteIndicative, INVENTAIRE_DIR } from "../hai-admin-mcp/lib/inventaire.mjs";
+import { loadInventaire, normalizeInventaire, mergeInventaire, reconcileIds, isStale, candidatesFrom, slugify, capaciteIndicative, INVENTAIRE_DIR } from "../hai-admin-mcp/lib/inventaire.mjs";
 import { generatePassengers } from "../hai-admin-mcp/lib/passagers.mjs";
 import { ingestPassagers, IngestError } from "../hai-admin-mcp/lib/paxlist.mjs";
 import {
@@ -35,7 +35,8 @@ import { preflightUrls } from "../hai-admin-mcp/lib/preflight.mjs";
 import { discoveryNeeded } from "../hai-admin-mcp/lib/discovery.mjs";
 import { planExtension } from "../hai-admin-mcp/lib/capacite.mjs";
 import { buildHotelUrl, buildSearchPlan, HYPOTHESE_FILTRE_PRIX, NFLT_CODES_RELEVES_LE, sourcesActives } from "../hai-admin-mcp/lib/hai-urls.mjs";
-import { realCollect } from "../hai-admin-mcp/lib/pipeline.mjs";
+import { realCollect, fixturesCollect } from "../hai-admin-mcp/lib/pipeline.mjs";
+import { readLiteApiKey, construireVivier, COORD_ESCALES } from "../hai-admin-mcp/lib/liteapi.mjs";
 import { createHub } from "./sse-hub.mjs";
 import { createRunManager, HttpError } from "./run-manager.mjs";
 import { createSimulation, loadSimInventaire, simAvailable, SIM_STATIONS } from "./simulate.mjs";
@@ -120,6 +121,12 @@ export function createDemoServer(opts = {}) {
   let uploadedInfo = null; // résumé d'ingestion exposé à l'UI (jamais nominatif)
   let uploadedRapport = null; // rapport d'ingestion complet, repris tel quel dans le rapport de run
   let haiClient = null; // client H partagé, créé au premier run réel (journal du point d'entrée EU)
+  /* INV-10 pendant la CONSTRUCTION du vivier par API. `manager.isRunning()` ne couvre pas
+   * cette phase : elle dure une quinzaine de secondes d'appels et précède `manager.start`.
+   * Sans ce verrou, un second clic sur « lancer » déclenchait un second balayage complet —
+   * constaté en séance : sept runs en quatre-vingts secondes, et autant d'appels inutiles
+   * à un fournisseur dont la gratuité dépend d'un ratio d'usage raisonnable. */
+  let vivierApiEnCours = false;
 
   async function getHaiClient() {
     if (!haiClient) {
@@ -462,6 +469,69 @@ export function createDemoServer(opts = {}) {
     const station = loadStation(scenario.station);
     const rows = body.passengers === "uploaded" ? uploadedRows : null;
     if (body.passengers === "uploaded" && !rows) throw new HttpError(400, "aucune liste passagers téléversée");
+
+    /* Vivier par API hôtelière (LiteAPI). Ni agent, ni simulation : de vraies fiches et de
+     * vrais tarifs publics, obtenus par une API en libre-service. AUCUNE session payante
+     * n'est lancée, donc INV-8 n'est pas concerné ; INV-1 non plus, l'adaptateur n'appelle
+     * que des points d'entrée de recherche. Le vivier est construit AVANT le run, écrit
+     * dans l'inventaire de l'escale, puis rejoué par `fixturesCollect` — le même chemin,
+     * déjà testé, que le mode hors ligne. */
+    if (body.source === "api") {
+      // INV-10 vérifié AVANT le premier appel réseau, pas seulement à `manager.start`
+      if (manager.isRunning()) throw new HttpError(409, "un run est déjà en cours (INV-10)");
+      if (vivierApiEnCours) throw new HttpError(409, "un vivier par API est déjà en construction — attendre sa fin (INV-10)");
+      if (invRefresher.isRunning()) throw new HttpError(409, "un rafraîchissement d'inventaire est en cours (INV-10)");
+      const coord = COORD_ESCALES[station.code];
+      if (!coord) {
+        throw new HttpError(400, `coordonnées inconnues pour l'escale ${station.code} — le vivier par API en a besoin (connues : ${Object.keys(COORD_ESCALES).join(", ")})`);
+      }
+      let cle;
+      try {
+        cle = readLiteApiKey();
+      } catch (err) {
+        throw new HttpError(501, `vivier par API indisponible : ${String(err.message)}`);
+      }
+      const { checkin, checkout, nights } = resolveDates(scenario, station);
+      let vivier;
+      vivierApiEnCours = true;
+      try {
+        vivier = await construireVivier({
+          station: station.code, coord, checkin, checkout, nuits: nights,
+          rayonM: Math.round((station.search?.radius_km ?? 40) * 1000) || 40000,
+          cle, slugify,
+          onProgress: (etape, data) => hub.publish({ type: "log", etape, ...data }),
+        });
+      } finally {
+        // le verrou tombe même en cas d'échec : sinon un appel raté bloquait tous les suivants
+        vivierApiEnCours = false;
+      }
+      if (!vivier.records.length) {
+        throw new HttpError(502, "l'API hôtelière n'a rendu aucun établissement exploitable — vérifier la clé, l'escale et les dates");
+      }
+      /* Le moteur choisit ses CANDIDATS dans l'inventaire de l'escale : les entrées de
+       * l'API doivent donc s'y trouver. Elles y entrent EN MÉMOIRE, jamais sur disque —
+       * `data/inventaire/<escale>.json` est versionné, et une écriture le salissait à
+       * chaque run : arbre git modifié après une démonstration, et surtout suite de tests
+       * en échec (un test vérifie que l'inventaire LIVRÉ ne contient que des entrées
+       * `agent`). Le mode simulation passe son inventaire de la même façon.
+       * La persistance délibérée reste possible par `tools/liteapi-releves.mjs
+       * --ecrire-inventaire`, où l'opérateur la demande explicitement. */
+      const existant = loadInventaire(station.code, { dir: dirs.inventaireDir });
+      const fusion = mergeInventaire(existant, { ...vivier.inventaire, hotels: reconcileIds(existant, vivier.entrees) });
+
+      const { runId } = manager.start({
+        policy, avion, scenario, station, rows, ingestion: rows ? uploadedRapport : null,
+        empreintePax: rows ? empreintePax(rows) : null,
+        inventaire: fusion,
+        simulate: false,
+        collectFactory: () => fixturesCollect(vivier.records),
+      });
+      return sendJson(res, 202, {
+        runId, simulate: false, source: "api",
+        vivier: { hotels: vivier.records.length, chambres: vivier.chambres, sandbox: vivier.sandbox },
+        avertissements: vivier.avertissements,
+      });
+    }
 
     if (!scenario.simulate) {
       // INV-8 : sessions payantes seulement derrière DEMO_ALLOW_PAID=1 côté serveur (phases 5-6)

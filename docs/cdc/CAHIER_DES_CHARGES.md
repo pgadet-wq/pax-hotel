@@ -703,11 +703,6 @@ Le §2.2 plaçait les « API hôtelières B2B » hors périmètre. Une **API hô
 (inscription immédiate, sans contrat ni volume minimum) y est entrée, le client ayant écarté les
 passerelles B2B contractuelles pour raison de coût.
 
-> **Portée de cet amendement sur `main` (24/09/2026).** Le code décrit ci-dessous vit sur la branche
-> `feat/approvisionnement-api` et **n'est pas fusionné dans `main`**. L'amendement est consigné ici
-> parce qu'il tranche un point de périmètre du §2.2 ; il ne décrit pas l'état du code de `main`.
-> La fusion attend la remesure sur clé de production.
-
 Motif : le point bloquant « vivier insuffisant » avait une cause que la lecture d'écran ne pouvait pas
 lever — **le sélecteur de quantité des plateformes grand public plafonne à 9 chambres**. Les 111
 chambres indicatives, c'était 12 hôtels multipliés par ce plafond.

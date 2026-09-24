@@ -35,10 +35,6 @@ des plateformes grand public plafonne à 9 chambres par hôtel, soit ~111 chambr
 demandées. C'est mesuré, l'outil le dit lui-même au dry-run, et **aucune séance ne doit laisser croire le
 contraire**.
 
-> **Disponible seulement sur la branche `feat/approvisionnement-api`.** La case n'existe pas dans
-> l'interface de `main` : jouer cette variante suppose d'avoir démarré le serveur depuis cette branche.
-> À vérifier **avant** la séance, pas devant le client.
-
 Pour montrer la réponse : cocher « **Vivier par API hôtelière (prix publics réels, aucun agent)** » à
 l'étape 4. Le run interroge un distributeur au lieu de lancer des agents — **0 session, 0 $**, quelques
 secondes au lieu de 25 minutes — puis rejoue exactement le même moteur d'allocation.

@@ -420,3 +420,16 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 .pec-couronnes { font-size: 0.9em; }
 .pec-couronnes-liste { margin: 4px 0 0 16px; padding: 0; }
 .pec-couronnes-liste li { margin: 2px 0; overflow-wrap: anywhere; }
+
+/* Choix du vivier : l'état « ni simulation, ni API » ne mène qu'au refus INV-8.
+   L'écran le dit avant le clic, plutôt que de laisser le serveur le dire après. */
+.avert-vivier {
+  margin: 4px 0 8px;
+  padding: 6px 8px;
+  border-left: 4px solid var(--warn);
+  background: var(--esc-bg);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.checkline.alerte-vivier { color: var(--warn); }

@@ -142,6 +142,61 @@ Ce fichier est la mémoire entre deux conversations Claude Code. Il est lu au d�
 - Recette UI simulation (15/09, navigateur) : `docs/recette-demo-v2.md` §2 — **chiffres périmés**, encadré ajouté en tête
 - Run complet réel : **JOUÉ le 16/09** (`mu3lnxm4`, recette §4)
 
+## Approvisionnement par API — LiteAPI (22-23/09/2026, **fusionné dans `main` le 25/09**)
+
+Le point bloquant « vivier BKK insuffisant » avait une cause que la lecture d'écran ne pouvait pas lever : **le sélecteur de quantité des plateformes grand public plafonne à 9**. Les 111 chambres indicatives, c'était 12 hôtels multipliés par ce plafond. Le client ayant écarté les passerelles B2B contractuelles pour raison de coût, la voie retenue est l'**API hôtelière en libre-service** : inscription immédiate, sans contrat ni volume minimum.
+
+**Mesuré le 22/09** (`tools/sonde-api.mjs --preflight`, gratuit, 0 session) :
+
+- **Amadeus Self-Service est MORT** — décommissionné le 17/07/2026, `test.api.amadeus.com` ne résout plus. Toute analyse qui le recommande est périmée.
+- Vivants, 401 propre : **LiteAPI** (`X-API-Key`), Duffel Stays, RateHawk, Hotelbeds (test).
+- Duffel est un mauvais candidat ici : pénalité au-delà d'un ratio recherches/réservations de 1500:1, or sous INV-1 l'outil ne réserve jamais.
+
+**Mesures LiteAPI sur BKK, nuit du 22 au 23/09, rayon 40 km, clé BAC À SABLE :**
+
+- **185 hôtels, 11 059 offres en un appel de 7 s** — contre 12 hôtels et 111 chambres dans l'inventaire.
+- Le multi-chambres sert **tous** les créneaux demandés (vérifié 2/2, 5/5, 8/8, 10/10 par `rates[].occupancyNumber`). Plafond par hôtel ≈ 10 ; 12 est refusé.
+- **Aucun champ de quantité n'existe** dans la réponse : la capacité se MESURE en demandant N chambres, elle ne se lit pas.
+- **Défaut à connaître** : `limit` > 40 casse la requête multi-chambres, et **l'API rend alors « no availability found » au lieu d'une erreur** (5 chambres : limit=20 → 17 hôtels · 40 → 38 · 100 → 0 · 200 → 0). Un adaptateur qui croit ce zéro annonce « aucune chambre à Bangkok » alors qu'il y en a des centaines.
+
+**Livré :** `lib/liteapi.mjs` (adaptateur), `tools/liteapi-releves.mjs` (outil), `tools/sonde-api.mjs` (banc de sonde), `test/liteapi.test.mjs` (16 cas). Une seule modification du code existant : `source: z.enum([… , "api"])` dans `lib/inventaire.mjs` — le quatrième type de source, pour qu'une entrée venue d'une API ne se déclare pas « agent ».
+
+Trois règles nées de la mesure sont câblées et testées : `limit` ≤ 40 · tout appel est rejoué · **un zéro est recoupé à `limit` plus bas avant d'être cru**, et le mensonge est nommé dans les avertissements. La règle du zéro a servi dès le premier run réel.
+
+**La distance est réglée à la racine** : les coordonnées de la fiche donnent une distance calculée qui PORTE sa référence (`distance_ref: "airport"`). 40 hôtels sur 40 en sont pourvus, là où le convertisseur d'inventaire forçait `distance_ref: null` et expédiait tout hôtel en couronne la plus lointaine.
+
+**Mesure de bout en bout** — liste réelle SB800 (324 passagers, 195 dossiers, 209 chambres), rejeu hors ligne, 0 session, 0 $ :
+
+- **171 dossiers logés / 24 en escalade · 288 personnes sur 324** (contre 122/35 en simulation sur les 12 hôtels)
+- escalades : 17 capacité cabine W · 5 droit d'entrée · 2 mineurs non accompagnés — **seules 17 sont un manque de chambres**
+- couronnes : **66 dossiers en couronne 1**, contre 2 hôtels et 10 chambres auparavant
+- conformité : 104 CONFORME · 27 PARTIELLE (service d'étage non précisé) · ~40 HORS BARÈME
+- `npm test` : **332 cas, 0 échec** · `data/inventaire/BKK.json` restauré à ses 12 hôtels
+
+**Réserves.** La réponse porte `"sandbox": true` : les VOLUMES sont des données de test, pas l'inventaire réel de Bangkok. Le protocole est prouvé, le stock ne l'est pas — à remesurer avec une clé de production. Les 40 dossiers HORS BARÈME relèvent de la tarification du bac à sable.
+
+**À instruire ensuite** : porter latitude/longitude dans `data/stations/*.json` (elles vivent pour l'instant dans l'outil) ; décider si `prebook` — qui bloque l'inventaire 5 à 15 min à tarif garanti **sans réserver** — tombe ou non sous INV-1.
+
+### Câblage dans l'interface (23/09/2026)
+
+L'adaptateur n'était utilisable qu'en ligne de commande. Une case **« Vivier par API hôtelière (prix publics réels, aucun agent) »** ajoute `source: "api"` à `POST /api/run` ; le serveur construit le vivier, le passe **en mémoire** à `manager.start`, et rejoue par `fixturesCollect` — le même chemin, déjà testé, que le mode hors ligne. Aucune session payante : INV-8 n'est pas concerné, INV-1 non plus.
+
+`construireVivier()` centralise ce que faisait le CLI (fiches, dictionnaire d'équipements, offres par palier) : **un seul chemin de code** pour l'outil et pour le serveur.
+
+**Trois défauts trouvés en séance et corrigés** — chacun aurait pu se déclencher devant un client :
+
+1. **Le choix du vivier menait à un refus au lancement.** Décocher « mode démonstration » sans cocher « vivier par API » envoyait le run sur les agents payants (501, INV-8). Les trois viviers s'excluent désormais à l'écran : cocher l'API décoche et grise la simulation, et l'état « ni l'un ni l'autre » affiche un avertissement nommant le refus qui suivrait.
+2. **Un run salissait l'inventaire versionné.** Le vivier était écrit dans `data/inventaire/<escale>.json` : arbre git modifié après chaque run, et **suite de tests en échec** (`inventaire.test.mjs` vérifie que l'inventaire LIVRÉ ne contient que des entrées `agent` ; mesuré : 42 hôtels dont 36 `api`, 331/332). L'inventaire fusionné passe maintenant en mémoire, comme en simulation. La persistance délibérée reste sur `tools/liteapi-releves.mjs --ecrire-inventaire`.
+3. **INV-10 ne couvrait pas la construction du vivier.** `manager.start` refuse un second run, mais la branche API construit le vivier AVANT de l'appeler — une quinzaine de secondes pendant lesquelles `isRunning()` reste faux. Mesuré : **sept runs en quatre-vingts secondes** là où l'opérateur croyait en avoir lancé deux. La garde est désormais posée avant le premier appel réseau, avec un verrou libéré en `finally`.
+
+**Ce que la variabilité du bac à sable impose de savoir** : trois runs consécutifs ont rendu 36 hôtels / 1 760 chambres, puis 13 / 66, puis 8 hôtels. Les résultats ont varié de **171 logés / 288 personnes** à **141 logés / 300 personnes** sur la même liste. Des runs rapprochés rendent parfois des relevés **identiques hors horodatage** : c'est le cache du fournisseur, pas une recopie de l'outil — l'allocation, elle, est déterministe et doit l'être. Toute répétition avant une démonstration doit donc se faire **juste avant**, pas la veille.
+
+### Exposition réseau (vérifiée le 23/09/2026)
+
+`127.0.0.1:4310` est le **seul** point d'entrée de l'outil sur ce poste. Le serveur est lié à `127.0.0.1` par défaut (`demo/server.mjs`, `const host = opts.host ?? "127.0.0.1"`), donc injoignable depuis le réseau. Aucune instance déployée n'est référencée : `deploy/` ne contient que des gabarits (`https://IP.PU.BLI.QUE`), et le guide Scaleway impose de **ne jamais ouvrir 4310**, Caddy seul étant exposé en 443.
+
+Les ports `0.0.0.0:3000`, `:8000` et `:8080` observés en écoute appartiennent à **Docker Desktop**, pas à ce projet.
+
 ## Audit et guide client (23/09/2026)
 
 Deux documents ajoutés, **hors phase**, sans modification de code : `docs/AUDIT-2026-09-23.md` (audit de l'outil) et `docs/GUIDE-CLIENT.md` (guide de fonctionnement destiné à la compagnie : pourquoi l'outil, ce qu'il est, comment il marche, ce qu'il remplace et ce qu'il renforce, les 7 conditions et leur état).
@@ -150,7 +205,7 @@ Deux documents ajoutés, **hors phase**, sans modification de code : `docs/AUDIT
 
 **Écarts relevés par l'audit** (les six écarts documentaires ont été **traités le jour même**, voir plus bas ; aucun code n'a été modifié) **:**
 
-- **Dépôt** : `origin/main` est à `64033b0` (16/09) — **13 commits de retard** (7 sur `main` local + 6 sur `feat/approvisionnement-api`). PAXLIST, C1-C7, couronnes, relectures adverses et adaptateur API n'existent que sur ce poste.
+- **Dépôt** *(constat du 23/09, RÉGLÉ depuis)* : `origin/main` était à `64033b0` (16/09), 13 commits de retard. Tout a été poussé depuis : C1-C7, couronnes, PAXLIST v3, découverte multi-sources, puis **la fusion de `feat/approvisionnement-api` dans `main` le 25/09** — l'adaptateur LiteAPI est désormais sur `main`.
 - **`docs/matrice-affectation.md` est faux depuis le 21/09** : il décrit encore l'ordre figé « pmr → famille → J → W → Y » ; 0 occurrence de « couronne », 0 de « prise en charge ». C'est le document de référence des règles d'affectation.
 - **Bornes** : README annonce 18 sessions / 10 $ / 45 min, le code applique **50 / 15 $ / 60 min**. L'écart touche C5 (« moins d'une heure ») : le défaut livré vaut exactement une heure et le dry-run avertit que l'estimation haute (69 min) la dépasse.
 - **PAXLIST** : code et modèles livrés portent **28 colonnes**, `format-liste-passagers.md` aussi ; README (« v1 et v2 ») et CDC §19.1 (« 26 colonnes ») sont périmés — et les 2 colonnes manquantes sont précisément `vol_correspondance` / `heure_correspondance`.
@@ -170,16 +225,8 @@ Deux documents ajoutés, **hors phase**, sans modification de code : `docs/AUDIT
 
 **Non traités, et c'est volontaire** : tout ce qui relève du comportement (constats A de l'audit) et de la livraison (constats C). En particulier, la valeur de `max_minutes_per_run` est un **arbitrage produit**, pas un écart de documentation : le README le nomme désormais au lieu de le masquer.
 
-### Sur `main` : ce que la documentation décrit et que le code de cette branche n'a PAS
-
-Ces documents sont arrivés sur `main` par **cherry-pick de `265b653`** (24/09/2026), leur commit d'origine étant sur `feat/approvisionnement-api`. Ils décrivent donc **l'approvisionnement du vivier par API hôtelière**, qui vit entièrement sur cette branche et **n'est pas fusionné dans `main`** : `lib/liteapi.mjs`, `tools/liteapi-releves.mjs`, `tools/sonde-api.mjs`, `test/liteapi.test.mjs`, la case « Vivier par API hôtelière » de l'interface et le `source: "api"` de `lib/inventaire.mjs`.
-
-Sur `main`, le vivier a donc **deux** sources (inventaire d'escale, agents web) et non trois, et `LITEAPI_KEY` n'y sert à rien. Chaque endroit qui décrit cette troisième source porte la mention de la branche. La fusion attend la remesure sur **clé de production** (constat C2 de l'audit) : la couverture « 288 personnes sur 324 » vient du bac à sable.
-
-**Un chiffre diffère, et il faut le savoir** : `npm test` rend **316 cas sur `main`** et **332 sur la branche** — les 16 cas de `test/liteapi.test.mjs` n'existent que là-bas. Partout où ces documents écrivent « 332 », lire 316 sur `main`. Mesuré le 24/09 sur les deux branches. Tout le reste est identique et vérifié sur `main` : `--dry-run` **111 chambres pour 173 demandées, 15 candidats**, bornes **50 · 4 vagues · 15 $ · 60 min**.
-
 ## Prochaine phase
 
 - **Les phases 0 à 7 du CDC sont terminées** (phase 7 close le 16/09). Il n'y a plus de fiche de phase à ouvrir.
-- Travaux suivants, par ordre de valeur : (1) **élargir le vivier BKK** — seul point bloquant ; (2) rendre le tri de `rankedFor()` indépendant du plafond, pour que le levier de séance soit sûr ; (3) arbitrer « 1 chambre par PMR » et le sort du rapport nominatif ; (4) écran de correspondance RBD vers cabine.
+- Travaux suivants, par ordre de valeur : (1) **élargir le vivier BKK** — *traité par l'adaptateur LiteAPI, fusionné dans `main` le 25/09 (voir la section ci-dessus) ; reste à confirmer sur une clé de PRODUCTION, les mesures connues venant d'un bac à sable* ; (2) rendre le tri de `rankedFor()` indépendant du plafond, pour que le levier de séance soit sûr ; (3) arbitrer « 1 chambre par PMR » et le sort du rapport nominatif ; (4) écran de correspondance RBD vers cabine.
 - Avant toute clôture : `git fetch`, relire ce fichier, compléter sans écraser (plusieurs conversations commitent dans ce dépôt).

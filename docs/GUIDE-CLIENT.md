@@ -173,7 +173,7 @@ C'est la partie du dispositif qui a le plus évolué, et celle qui détermine si
 |---|---|---|---|
 | **Inventaire de l'escale** | un fichier par escale (`data/inventaire/BKK.json`), constitué à l'avance, hôtels notés, avec paiement société et drapeaux « contracté / préféré / exclu » | gratuit | en service — BKK porte 12 fiches |
 | **Agents web Holo** | des agents lisent les pages publiques, découvrent des hôtels, relèvent chambres et prix, et **sondent** la capacité réelle | payant (~2,50 $ le run) | en service, éprouvé en réel le 16/09 |
-| **API hôtelière (LiteAPI)** | interrogation directe d'un distributeur, prix publics, sans agent | quasi nul | **livré le 23/09 sur une branche séparée**, à confirmer sur clé de production avant mise en service |
+| **API hôtelière (LiteAPI)** | interrogation directe d'un distributeur, prix publics, sans agent | quasi nul | **livré le 23/09, à confirmer sur clé de production** |
 
 **Pourquoi la troisième source a été ajoutée — c'est le point le plus important de ce guide.**
 La lecture d'écran se heurte à un plafond que rien, côté code, ne peut lever : **le sélecteur de

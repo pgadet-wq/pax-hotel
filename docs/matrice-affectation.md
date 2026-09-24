@@ -48,10 +48,6 @@ agents** sur les pages publiques, et — depuis le 22/09/2026 — l'**API hôtel
 case « Vivier par API hôtelière » dans l'UI), qui interroge un distributeur sans agent ni lecture
 d'écran. Les entrées venues d'une API portent `source: "api"` et ne se déclarent jamais « agent ».
 
-> **Sur `main` : deux sources, pas trois.** L'API hôtelière vit sur la branche
-> `feat/approvisionnement-api`, non fusionnée. La conformité, elle, se calcule de la même façon quelle
-> que soit la source — c'est pourquoi le reste de ce document vaut dans les deux cas.
-
 Le reste de cette section décrit la **découverte par agents** : elle ouvre une recherche de zone
 Booking et y ajoute des filtres `nflt` dérivés de la politique et de la fiche escale.
 `rebooking-v2 --dry-run` et `inventaire --dry-run` affichent **l'URL exacte de chaque passe** avec ses

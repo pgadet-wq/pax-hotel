@@ -28,7 +28,12 @@ const HotelEntrySchema = z.object({
    * Un lead n'est JAMAIS alloue au plan (INV-3 : prix publics uniquement) ; il alimente le
    * vivier de repli a appeler. Il est PROMU en `agent` des que son nom se recoupe avec un
    * candidat de plateforme, sans depenser de session supplementaire. */
-  source: z.enum(["agent", "manuel", "lead"]),
+  /** `api` : entrée produite par un adaptateur d'approvisionnement (LiteAPI et suivants),
+   * sans aucune session d'agent. Elle se comporte comme `agent` à la fusion — seule
+   * `manuel` est intouchable — mais la distinction doit rester lisible : une chambre venue
+   * d'une API n'a pas été vue sur un écran, et une chambre vue sur un écran n'a pas de
+   * tarif contractuel derrière elle. */
+  source: z.enum(["agent", "manuel", "lead", "api"]),
   /** Source d'origine (booking, agoda, tripcom, expedia, maps) — trace d'audit et
    * diagnostic : savoir quelle source rapporte permet d'arreter celles qui ne rapportent pas. */
   source_cle: z.string().default(""),

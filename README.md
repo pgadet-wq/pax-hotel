@@ -140,14 +140,7 @@ choisir avant le run (elles s'excluent à l'écran) :
 |---|---|---|---|
 | **Inventaire de l'escale** | `data/inventaire/<CODE>.json`, constitué à l'avance (Étage 0), avec paiement société et drapeaux contracté / préféré / exclu | gratuit | en service |
 | **Agents web Holo** | découverte + relevés + sondes de capacité sur les pages publiques | payant (~2,5 $ le run) | en service, éprouvé en réel le 16/09 |
-| **API hôtelière (LiteAPI)** | interrogation directe d'un distributeur, prix publics, **aucun agent** | quasi nul | **sur la branche `feat/approvisionnement-api`, pas dans `main`** — à confirmer sur clé de production |
-
-> **Sur `main`, le vivier a DEUX sources, pas trois.** Tout ce qui suit sur l'API hôtelière —
-> `lib/liteapi.mjs`, `tools/liteapi-releves.mjs`, `tools/sonde-api.mjs`, la case « Vivier par API
-> hôtelière » de l'interface, la variable `LITEAPI_KEY` — vit sur la branche
-> `feat/approvisionnement-api` et **n'y est pas fusionné**. La section est conservée ici parce qu'elle
-> explique le point bloquant principal du projet et la voie de sortie retenue ; la fusion attend la
-> remesure sur clé de production.
+| **API hôtelière (LiteAPI)** | interrogation directe d'un distributeur, prix publics, **aucun agent** | quasi nul | livré le 22-23/09, **à confirmer sur clé de production** |
 
 **Pourquoi la troisième source existe.** Le sélecteur de quantité des plateformes grand public
 **plafonne à 9 chambres par hôtel** : 12 hôtels × 9 ≈ 110 chambres indicatives, quel que soit le
