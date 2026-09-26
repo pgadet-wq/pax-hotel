@@ -168,6 +168,11 @@ Trois règles nées de la mesure sont câblées et testées : `limit` ≤ 40 · 
 **Mesure de bout en bout** — liste réelle SB800 (324 passagers, 195 dossiers, 209 chambres), rejeu hors ligne, 0 session, 0 $ :
 
 - **171 dossiers logés / 24 en escalade · 288 personnes sur 324** (contre 122/35 en simulation sur les 12 hôtels)
+  - ⚠ **CORRECTION du 26/09** : ce « 171 contre 122 » n'est PAS à périmètre égal — la simulation porte sur la liste
+    GÉNÉRÉE (157 dossiers), LiteAPI sur la liste RÉELLE (195 dossiers). Sur la mesure décisive pour C2, les deux sont
+    à ÉGALITÉ : **288 personnes logées contre 289**. Aucune comparaison à périmètre égal n'existe : le chemin par
+    agents n'a jamais été joué de bout en bout sur la liste réelle avec le code actuel. Voir
+    `docs/APPROVISIONNEMENT-agents-vs-liteapi.md` §2.
 - escalades : 17 capacité cabine W · 5 droit d'entrée · 2 mineurs non accompagnés — **seules 17 sont un manque de chambres**
 - couronnes : **66 dossiers en couronne 1**, contre 2 hôtels et 10 chambres auparavant
 - conformité : 104 CONFORME · 27 PARTIELLE (service d'étage non précisé) · ~40 HORS BARÈME
@@ -196,6 +201,22 @@ L'adaptateur n'était utilisable qu'en ligne de commande. Une case **« Vivier p
 `127.0.0.1:4310` est le **seul** point d'entrée de l'outil sur ce poste. Le serveur est lié à `127.0.0.1` par défaut (`demo/server.mjs`, `const host = opts.host ?? "127.0.0.1"`), donc injoignable depuis le réseau. Aucune instance déployée n'est référencée : `deploy/` ne contient que des gabarits (`https://IP.PU.BLI.QUE`), et le guide Scaleway impose de **ne jamais ouvrir 4310**, Caddy seul étant exposé en 443.
 
 Les ports `0.0.0.0:3000`, `:8000` et `:8080` observés en écoute appartiennent à **Docker Desktop**, pas à ce projet.
+
+## Audit et analyse d'approvisionnement (26/09/2026)
+
+Deux documents ajoutés, **hors phase**, sans modification de code :
+
+- `docs/AUDIT-2026-09-26.md` — état de l'outil sur `main` à `90fc351` : objectifs, capacités condition par
+  condition, ce qui est solide, limites par ordre d'importance, sécurité et exploitation, recommandations.
+  Complète `docs/AUDIT-2026-09-23.md` (constats de comportement), il ne le remplace pas.
+- `docs/APPROVISIONNEMENT-agents-vs-liteapi.md` — plus-value comparée des agents Holo et de LiteAPI, champ
+  par champ et mesure par mesure. Conclusion : les agents ont perdu leur rôle de SOURCE (l'API le fait
+  150 fois plus vite, gratuitement, sans le plafond de 9) et en gagnent un autre — vérifier, qualifier,
+  atteindre les établissements hors catalogue. Partage recommandé : API en vivier primaire, agents en
+  vérification ciblée, `maps` en filet.
+
+**Constat d'audit repris dans ETAT** : la comparaison « 171 contre 122 » publiée plus haut n'était pas à
+périmètre égal ; correction posée à sa source (voir ci-dessus).
 
 ## Audit et guide client (23/09/2026)
 
